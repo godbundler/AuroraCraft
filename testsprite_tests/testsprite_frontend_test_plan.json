@@ -1,0 +1,1041 @@
+[
+  {
+    "id": "TC001",
+    "title": "Successful registration redirects to dashboard",
+    "description": "Verifies a user can create an account with valid details, accept terms, and is redirected to the dashboard.",
+    "category": "User Registration",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /register"
+      },
+      {
+        "type": "action",
+        "description": "Type \"newuser_qa_01\" into the Username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"newuser_qa_01@example.com\" into the Email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"Str0ngPass!234\" into the Password field"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Password strength indicator\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Type \"Str0ngPass!234\" into the Confirm Password field"
+      },
+      {
+        "type": "action",
+        "description": "Click on the Terms and Conditions checkbox"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Create Account\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/dashboard\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Projects\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC002",
+    "title": "Registration blocked when confirm password does not match",
+    "description": "Verifies the user remains on the registration page and sees an error when passwords do not match.",
+    "category": "User Registration",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /register"
+      },
+      {
+        "type": "action",
+        "description": "Type \"newuser_qa_02\" into the Username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"newuser_qa_02@example.com\" into the Email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"Str0ngPass!234\" into the Password field"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Password strength indicator\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Type \"DifferentPass!234\" into the Confirm Password field"
+      },
+      {
+        "type": "action",
+        "description": "Click on the Terms and Conditions checkbox"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Create Account\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Passwords do not match\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/register\""
+      }
+    ]
+  },
+  {
+    "id": "TC003",
+    "title": "Terms must be accepted to create an account",
+    "description": "Verifies registration is blocked when the terms checkbox is not checked.",
+    "category": "User Registration",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /register"
+      },
+      {
+        "type": "action",
+        "description": "Type \"newuser_qa_04\" into the Username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"newuser_qa_04@example.com\" into the Email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"Str0ngPass!234\" into the Password field"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Password strength indicator\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Type \"Str0ngPass!234\" into the Confirm Password field"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Create Account\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/register\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Accept\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC004",
+    "title": "Password strength indicator updates for a weak password",
+    "description": "Verifies the password strength indicator is shown and reflects a weak password entry.",
+    "category": "User Registration",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /register"
+      },
+      {
+        "type": "action",
+        "description": "Type \"weakpass_qa\" into the Username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"weakpass_qa@example.com\" into the Email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"123\" into the Password field"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Password strength indicator\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Weak\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Type \"123\" into the Confirm Password field"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/register\""
+      }
+    ]
+  },
+  {
+    "id": "TC005",
+    "title": "Password strength indicator updates for a stronger password",
+    "description": "Verifies the password strength indicator reflects a stronger password entry.",
+    "category": "User Registration",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /register"
+      },
+      {
+        "type": "action",
+        "description": "Type \"strongpass_qa\" into the Username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"strongpass_qa@example.com\" into the Email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"Str0ngPass!234\" into the Password field"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Password strength indicator\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Strong\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Type \"Str0ngPass!234\" into the Confirm Password field"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/register\""
+      }
+    ]
+  },
+  {
+    "id": "TC006",
+    "title": "Registration validation when required fields are empty",
+    "description": "Verifies the form does not submit and shows visible validation when required fields are missing.",
+    "category": "User Registration",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /register"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Create Account\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/register\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Username\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Email\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Password\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC007",
+    "title": "Registration validation for invalid email format",
+    "description": "Verifies an invalid email format prevents successful registration and keeps the user on the registration page.",
+    "category": "User Registration",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /register"
+      },
+      {
+        "type": "action",
+        "description": "Type \"newuser_qa_08\" into the Username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"not-an-email\" into the Email field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"Str0ngPass!234\" into the Password field"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Password strength indicator\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Type \"Str0ngPass!234\" into the Confirm Password field"
+      },
+      {
+        "type": "action",
+        "description": "Click on the Terms and Conditions checkbox"
+      },
+      {
+        "type": "action",
+        "description": "Click on the \"Create Account\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/register\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Email\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC008",
+    "title": "Dashboard shows project list for authenticated user",
+    "description": "Verifies an authenticated user can reach the dashboard and see the projects list UI.",
+    "category": "Dashboard Projects",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify page title contains \"Login\""
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/dashboard\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Projects\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC009",
+    "title": "Search filters projects to matching results",
+    "description": "Verifies searching from the dashboard filters the visible projects to relevant matches.",
+    "category": "Dashboard Projects",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/dashboard\""
+      },
+      {
+        "type": "action",
+        "description": "Type \"API\" into the project search bar"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"API\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC010",
+    "title": "Search with no matches shows empty-state message",
+    "description": "Verifies the dashboard shows a no-results message when the search query matches no projects.",
+    "category": "Dashboard Projects",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/dashboard\""
+      },
+      {
+        "type": "action",
+        "description": "Type \"zzzz-no-such-project\" into the project search bar"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"No projects found\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC011",
+    "title": "Sort projects using sort dropdown",
+    "description": "Verifies the sort control can be changed and the selected sort option is reflected in the UI.",
+    "category": "Dashboard Projects",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/dashboard\""
+      },
+      {
+        "type": "action",
+        "description": "Select \"Name\" from the sort dropdown"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Name\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC012",
+    "title": "Create Project CTA navigates to new project wizard",
+    "description": "Verifies the Create Project button on the dashboard navigates to the project creation wizard.",
+    "category": "Dashboard Projects",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/dashboard\""
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Create Project\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/projects/new\""
+      }
+    ]
+  },
+  {
+    "id": "TC013",
+    "title": "Search query can be cleared to restore list view",
+    "description": "Verifies a user can clear the search input and return to the default projects list view.",
+    "category": "Dashboard Projects",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/dashboard\""
+      },
+      {
+        "type": "action",
+        "description": "Type \"zzzz-no-such-project\" into the project search bar"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"No projects found\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Clear the project search bar"
+      }
+    ]
+  },
+  {
+    "id": "TC014",
+    "title": "Create project via wizard and land in workspace",
+    "description": "Verifies a user can complete all wizard steps and is redirected to the workspace after creating a project.",
+    "category": "Create Project Wizard",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/dashboard\""
+      },
+      {
+        "type": "action",
+        "description": "Click the \"New Project\" or \"Create Project\" call-to-action"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/projects/new\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Project Information\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Type \"E2E Wizard Project\" into the project name field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"Project created by end-to-end test\" into the project description field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Proceed\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Type\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Select \"Web\" from the project type options"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Proceed\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Configuration\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Select \"IntelliJ\" from the software dropdown"
+      },
+      {
+        "type": "action",
+        "description": "Select \"Java\" from the language dropdown"
+      },
+      {
+        "type": "action",
+        "description": "Select \"17\" from the Java version dropdown"
+      },
+      {
+        "type": "action",
+        "description": "Select \"Maven\" from the compiler dropdown"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Proceed\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Source\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Select \"Starter Template\" from the source template options"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Create Project\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/workspace/\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Workspace\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC015",
+    "title": "Validation: project name is required on Project Information step",
+    "description": "Verifies the wizard prevents moving forward when project name is blank and shows a validation message.",
+    "category": "Create Project Wizard",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/dashboard\""
+      },
+      {
+        "type": "action",
+        "description": "Click the \"New Project\" or \"Create Project\" call-to-action"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/projects/new\""
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Proceed\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Project name is required\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"Project Information\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC016",
+    "title": "Open workspace and confirm three-panel IDE layout is visible",
+    "description": "Verifies an authenticated user can open the workspace and see file tree, editor, and chat/aux panels.",
+    "category": "Workspace IDE",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/dashboard\""
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /workspace/123"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"File tree\" is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Editor\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC017",
+    "title": "Select files in file tree and confirm editor panel remains visible",
+    "description": "Verifies file selection interactions are usable and the editor panel remains present after selecting different files.",
+    "category": "Workspace IDE",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/dashboard\""
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /workspace/123"
+      },
+      {
+        "type": "action",
+        "description": "Click a file name in the file tree panel"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Editor\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC018",
+    "title": "Chat panel tabs switch and show corresponding visible content areas",
+    "description": "Verifies the chat/auxiliary panel tabs are clickable and switching tabs updates visible content in that panel.",
+    "category": "Workspace IDE",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/dashboard\""
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /workspace/123"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Chat\" tab in the chat panel"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Chat\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC019",
+    "title": "Toggle panel visibility settings and confirm layout updates",
+    "description": "Verifies visibility toggles change which panels are shown in the workspace layout.",
+    "category": "Workspace IDE",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/dashboard\""
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /workspace/123"
+      },
+      {
+        "type": "action",
+        "description": "Click the workspace \"Layout/Visibility\" settings control"
+      },
+      {
+        "type": "action",
+        "description": "Click the toggle to hide the chat/aux panel"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Chat\" is not visible"
+      }
+    ]
+  },
+  {
+    "id": "TC020",
+    "title": "Toggle visibility back on and confirm hidden panel returns",
+    "description": "Verifies a previously hidden panel can be shown again and becomes visible.",
+    "category": "Workspace IDE",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/dashboard\""
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /workspace/123"
+      },
+      {
+        "type": "action",
+        "description": "Click the workspace \"Layout/Visibility\" settings control"
+      },
+      {
+        "type": "action",
+        "description": "Click the toggle to show the chat/aux panel"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify element \"Chat\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC021",
+    "title": "Workspace shows UI-only/non-functional notice when attempting to use editor content",
+    "description": "Verifies the workspace communicates its UI-only limitation to the user within the workspace screen.",
+    "category": "Workspace IDE",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/dashboard\""
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /workspace/123"
+      },
+      {
+        "type": "action",
+        "description": "Click a file name in the file tree panel"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"UI only\" is visible"
+      }
+    ]
+  },
+  {
+    "id": "TC022",
+    "title": "File selection does not change editor content (static editor behavior)",
+    "description": "Verifies that selecting different files does not change the visible editor content, consistent with a static UI-first workspace.",
+    "category": "Workspace IDE",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/dashboard\""
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /workspace/123"
+      },
+      {
+        "type": "action",
+        "description": "Click a file name in the file tree panel"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify text \"UI only\" is visible"
+      },
+      {
+        "type": "action",
+        "description": "Click a different file name in the file tree panel"
+      }
+    ]
+  },
+  {
+    "id": "TC023",
+    "title": "Workspace loads without errors when interacting with multiple panels sequentially",
+    "description": "Verifies basic stability: user can click a file, switch a chat tab, and toggle visibility without leaving the workspace.",
+    "category": "Workspace IDE",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_USER}}\" into the email/username field"
+      },
+      {
+        "type": "action",
+        "description": "Type \"{{LOGIN_PASSWORD}}\" into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Sign in\" button"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/dashboard\""
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /workspace/123"
+      },
+      {
+        "type": "action",
+        "description": "Click a file name in the file tree panel"
+      },
+      {
+        "type": "action",
+        "description": "Click the \"Chat\" tab in the chat panel"
+      },
+      {
+        "type": "action",
+        "description": "Click the workspace \"Layout/Visibility\" settings control"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify URL contains \"/workspace/123\""
+      }
+    ]
+  }
+]

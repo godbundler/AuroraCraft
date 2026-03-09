@@ -1,0 +1,166 @@
+version: "2"
+type: frontend
+tech_stack:
+  - TypeScript
+  - React 19
+  - Vite 7
+  - Tailwind CSS 4
+  - Zustand
+  - TanStack Query
+  - React Router
+  - shadcn/ui
+  - lucide-react
+routes:
+  - path: /
+    file: src/pages/home.tsx
+    auth_required: false
+    description: Homepage with hero, features, and CTA
+  - path: /pricing
+    file: src/pages/pricing.tsx
+    auth_required: false
+    description: Pricing plans and tiers
+  - path: /docs
+    file: src/pages/docs.tsx
+    auth_required: false
+    description: Documentation placeholder
+  - path: /terms
+    file: src/pages/terms.tsx
+    auth_required: false
+    description: Terms of service
+  - path: /privacy
+    file: src/pages/privacy.tsx
+    auth_required: false
+    description: Privacy policy
+  - path: /community
+    file: src/pages/community.tsx
+    auth_required: false
+    description: Public community projects
+  - path: /login
+    file: src/pages/login.tsx
+    auth_required: false
+    description: User login page
+  - path: /register
+    file: src/pages/register.tsx
+    auth_required: false
+    description: User registration page with password strength indicator
+  - path: /forgot-password
+    file: src/pages/forgot-password.tsx
+    auth_required: false
+    description: Password reset request page
+  - path: /dashboard
+    file: src/pages/dashboard.tsx
+    auth_required: true
+    description: User dashboard with project list
+  - path: /projects/new
+    file: src/pages/new-project.tsx
+    auth_required: true
+    description: Multi-step project creation wizard
+  - path: /workspace/:projectId
+    file: src/pages/workspace.tsx
+    auth_required: true
+    description: Project workspace with file tree and editor
+  - path: /admin
+    file: src/pages/admin/overview.tsx
+    auth_required: true
+    description: Admin overview dashboard
+  - path: /admin/users
+    file: src/pages/admin/users.tsx
+    auth_required: true
+    description: Admin user management (UI only)
+  - path: /admin/ai-runtime
+    file: src/pages/admin/ai-runtime.tsx
+    auth_required: true
+    description: Admin AI configuration (UI only)
+  - path: /admin/projects
+    file: src/pages/admin/projects.tsx
+    auth_required: true
+    description: Admin project management (UI only)
+features:
+  - name: User Login
+    description: Authenticate user with credentials
+    files:
+      - src/pages/login.tsx
+      - src/hooks/use-auth.ts
+    entry_route: /login
+    user_interactions:
+      - Fill email/username input
+      - Fill password input
+      - Click Sign In button
+      - See error toast on invalid credentials
+      - Redirect to dashboard on success
+    api_calls:
+      - method: POST
+        endpoint: /api/auth/login
+    auth_required: false
+  - name: User Registration
+    description: Create a new user account
+    files:
+      - src/pages/register.tsx
+      - src/hooks/use-auth.ts
+      - src/components/auth/password-strength.tsx
+    entry_route: /register
+    user_interactions:
+      - Fill username input
+      - Fill email input
+      - Fill password input and see strength indicator
+      - Fill confirm password input
+      - Check terms checkbox
+      - Click Create Account button
+      - See error if passwords do not match or API rejects
+      - Redirect to dashboard on success
+    api_calls:
+      - method: POST
+        endpoint: /api/auth/register
+    auth_required: false
+  - name: Dashboard Projects
+    description: View and search projects
+    files:
+      - src/pages/dashboard.tsx
+      - src/components/dashboard/project-list.tsx
+    entry_route: /dashboard
+    user_interactions:
+      - View list of projects
+      - Search projects using search bar
+      - Sort projects using select dropdown
+      - Click Create Project button
+    auth_required: true
+  - name: Create Project Wizard
+    description: Multi-step form to configure a new project
+    files:
+      - src/pages/new-project.tsx
+      - src/components/dashboard/create-project-wizard.tsx
+    entry_route: /projects/new
+    user_interactions:
+      - Enter project name and description
+      - Proceed to Type step
+      - Select project type
+      - Proceed to Configuration step
+      - Select software, language, java version, compiler
+      - Proceed to Source step
+      - Select source template
+      - Click Create Project button
+    auth_required: true
+  - name: Workspace IDE
+    description: Three-panel IDE layout
+    files:
+      - src/pages/workspace.tsx
+    entry_route: /workspace/123
+    user_interactions:
+      - Click files in the file tree panel
+      - View code in the Monaco editor panel
+      - Click tabs in the chat panel
+      - Toggle visibility settings
+    auth_required: true
+known_limitations:
+  - issue: Dashboard uses mock project data
+    location: src/pages/dashboard.tsx
+    impact: Created projects are not persisted or displayed correctly
+  - issue: Admin panel is UI only
+    location: src/pages/admin/*.tsx
+    impact: All admin tables show mock data and actions do not work
+  - issue: Workspace is UI only
+    location: src/pages/workspace.tsx
+    impact: File tree is hardcoded, editor is static, chat panel is non-functional
+  - issue: Community page uses mock data
+    location: src/pages/community.tsx
+    impact: Searching filters hardcoded mock data only

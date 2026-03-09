@@ -1,0 +1,20 @@
+{
+  "status": "commited",
+  "type": "frontend",
+  "scope": "codebase",
+  "localEndpoint": "http://localhost:3000",
+  "loginUser": "admin",
+  "loginPassword": "admin123",
+  "executionArgs": {
+    "projectName": "AuroraCraft",
+    "projectPath": "/workspaces/AuroraCraft",
+    "testIds": [],
+    "additionalInstruction": "Please ensure to thoroughly test UI components, responsive layout, dark theme elements, loading states, form validation (like password strength and matching) and handle navigation precisely. Watch out for route redirections.",
+    "serverMode": "production",
+    "envs": {
+      "API_KEY": "sk-user-YM0o-t_b1zyRklTvOO8ceSGc5jW94KEOy4K1sFOFYOEH3Dkwp_1ioP_pyjEpwnLY3oiWc5uB-klDgsZY_76_mTNITsR2WYvxRa2leGNJmEpq8CX1DMGyagNK1KyTu4k34vM"
+    }
+  },
+  "serverPort": 44395,
+  "proxy": "http://f46636ae-1dc9-4569-9d03-4eaf0b50ad0d:9ItQ9UIyBbhrrlacVSzCdYqwp17EI8Gj@tun.testsprite.com:8080"
+}
