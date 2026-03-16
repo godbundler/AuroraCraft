@@ -37,11 +37,13 @@ export class AgentExecutor {
           context: {
             opencodeSessionId: context.opencodeSessionId,
             model: context.model,
+            projectLinkId: context.projectLinkId,
             projectName: context.projectName,
             software: context.software,
             language: context.language,
             compiler: context.compiler,
             javaVersion: context.javaVersion,
+            projectDirectory: context.projectDirectory,
           },
         },
         (event) => {

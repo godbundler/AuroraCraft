@@ -1,23 +1,19 @@
 module.exports = {
   apps: [
     {
-      name: 'auroracraft-postgres',
-      script: 'bash',
-      args: '-c "sudo service postgresql start && sleep infinity"',
-      autorestart: true,
-      watch: false,
-      log_date_format: 'YYYY-MM-DD HH:mm:ss',
-      error_file: '/workspaces/AuroraCraft/logs/postgres-error.log',
-      out_file: '/workspaces/AuroraCraft/logs/postgres-out.log',
-      merge_logs: true,
-    },
-    {
       name: 'auroracraft-server',
       cwd: '/workspaces/AuroraCraft',
       script: 'node_modules/.bin/tsx',
       args: 'server/src/index.ts',
       env: {
         NODE_ENV: 'production',
+        DATABASE_URL: 'postgresql://auroracraft:auroracraft@localhost:5432/auroracraft',
+        PORT: 3000,
+        HOST: '0.0.0.0',
+        SESSION_SECRET: 'change-me-to-a-random-secret-key-12345',
+        COOKIE_DOMAIN: 'localhost',
+        CLIENT_URL: 'http://localhost:5173',
+        OPENCODE_URL: 'http://localhost:4096',
       },
       instances: 1,
       autorestart: true,

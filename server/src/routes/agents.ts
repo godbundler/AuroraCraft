@@ -8,6 +8,7 @@ import { agentMessages } from '../db/schema/agent-messages.js'
 import { agentLogs } from '../db/schema/agent-logs.js'
 import { authMiddleware } from '../middleware/auth.js'
 import { agentExecutor } from '../agents/executor.js'
+import { opencodeBridge } from '../bridges/index.js'
 
 const sendMessageSchema = z.object({
   content: z.string().min(1).max(10000),
@@ -21,6 +22,11 @@ async function verifyProjectOwnership(userId: string, projectId: string) {
     .where(and(eq(projects.id, projectId), eq(projects.userId, userId)))
     .limit(1)
   return project
+}
+
+function getProjectDirectory(username: string, linkId: string | null): string {
+  if (!linkId) return '.'
+  return `/home/auroracraft-${username}/${linkId}`
 }
 
 export async function agentRoutes(app: FastifyInstance) {
@@ -87,6 +93,106 @@ export async function agentRoutes(app: FastifyInstance) {
     return { ...session, messages }
   })
 
+  // SSE streaming endpoint for live updates
+  app.get('/api/projects/:projectId/agent/sessions/:sessionId/stream', { preHandler: [authMiddleware] }, async (request, reply) => {
+    const { projectId, sessionId } = request.params as { projectId: string; sessionId: string }
+
+    const project = await verifyProjectOwnership(request.user!.id, projectId)
+    if (!project) {
+      return reply.status(404).send({ message: 'Project not found', statusCode: 404 })
+    }
+
+    const [session] = await db
+      .select()
+      .from(agentSessions)
+      .where(and(eq(agentSessions.id, sessionId), eq(agentSessions.projectId, projectId)))
+      .limit(1)
+
+    if (!session) {
+      return reply.status(404).send({ message: 'Session not found', statusCode: 404 })
+    }
+
+    const username = request.user!.username
+    const projectDir = getProjectDirectory(username, project.linkId)
+
+    // Hijack the response for raw SSE streaming
+    reply.hijack()
+    const raw = reply.raw
+    raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    })
+
+    const sendSSE = (data: unknown) => {
+      if (!raw.destroyed) {
+        raw.write(`data: ${JSON.stringify(data)}\n\n`)
+      }
+    }
+
+    // Heartbeat to keep connection alive
+    const heartbeat = setInterval(() => {
+      if (!raw.destroyed) {
+        raw.write(': heartbeat\n\n')
+      }
+    }, 15000)
+
+    let unsubscribe: (() => void) | null = null
+    let subscribed = false
+
+    const trySubscribe = () => {
+      if (subscribed) return
+
+      // Find the opencodeSessionId (poll DB if needed)
+      const doSubscribe = async () => {
+        let opencodeId = session.opencodeSessionId
+
+        // Poll for up to 30 seconds if no opencodeSessionId yet
+        if (!opencodeId) {
+          for (let i = 0; i < 60; i++) {
+            if (raw.destroyed) return
+            await new Promise((r) => setTimeout(r, 500))
+
+            const [refreshed] = await db
+              .select({ opencodeSessionId: agentSessions.opencodeSessionId })
+              .from(agentSessions)
+              .where(eq(agentSessions.id, sessionId))
+              .limit(1)
+
+            if (refreshed?.opencodeSessionId) {
+              opencodeId = refreshed.opencodeSessionId
+              break
+            }
+          }
+        }
+
+        if (!opencodeId || raw.destroyed) return
+
+        subscribed = true
+        unsubscribe = opencodeBridge.subscriptionManager.subscribe(
+          projectDir,
+          opencodeId,
+          (event) => sendSSE(event),
+        )
+      }
+
+      doSubscribe().catch(() => {})
+    }
+
+    // Start trying to subscribe
+    trySubscribe()
+
+    // Send initial connection event
+    sendSSE({ type: 'status', status: 'connected' })
+
+    // Clean up on disconnect
+    request.raw.on('close', () => {
+      clearInterval(heartbeat)
+      unsubscribe?.()
+    })
+  })
+
   // Send a message to an agent session
   app.post('/api/projects/:projectId/agent/sessions/:sessionId/messages', { preHandler: [authMiddleware] }, async (request, reply) => {
     const { projectId, sessionId } = request.params as { projectId: string; sessionId: string }
@@ -127,6 +233,33 @@ export async function agentRoutes(app: FastifyInstance) {
       })
       .returning()
 
+    // Resolve project directory
+    const username = request.user!.username
+    const projectDir = getProjectDirectory(username, project.linkId)
+
+    // Pre-create or resolve the OpenCode session so the SSE endpoint can subscribe immediately
+    let opencodeSessionId = session.opencodeSessionId ?? undefined
+    try {
+      opencodeSessionId = await opencodeBridge.createOrResolveSession(
+        projectDir,
+        project.linkId ?? project.name,
+        opencodeSessionId,
+      )
+
+      // Save opencodeSessionId early so SSE endpoint can pick it up
+      await db
+        .update(agentSessions)
+        .set({ opencodeSessionId, updatedAt: new Date() })
+        .where(eq(agentSessions.id, sessionId))
+    } catch (err) {
+      app.log.warn({ err, sessionId }, 'Failed to pre-create OpenCode session')
+    }
+
+    // Clear stale buffered events from previous messages so SSE subscribers don't replay old 'complete' events
+    if (opencodeSessionId) {
+      opencodeBridge.subscriptionManager.clearBuffer(projectDir, opencodeSessionId)
+    }
+
     // Fire-and-forget: launch the AI agent executor asynchronously
     agentExecutor.execute(
       {
@@ -135,12 +268,15 @@ export async function agentRoutes(app: FastifyInstance) {
         prompt: parsed.data.content,
         bridgeName: 'opencode',
         model: parsed.data.model,
-        opencodeSessionId: session.opencodeSessionId ?? undefined,
+        opencodeSessionId,
+        projectLinkId: project.linkId ?? undefined,
         projectName: project.name,
         software: project.software,
         language: project.language,
         compiler: project.compiler,
         javaVersion: project.javaVersion,
+        projectDirectory: projectDir,
+        userHomeDir: `/home/auroracraft-${username}`,
       },
       {
         onOutput: (content) => { app.log.debug({ sessionId }, `Agent output: ${content.substring(0, 100)}`) },

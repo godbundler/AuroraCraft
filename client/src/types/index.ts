@@ -11,6 +11,7 @@ export interface Project {
   id: string
   userId: string
   name: string
+  linkId: string | null
   description: string | null
   status: 'active' | 'archived'
   software: string
@@ -70,7 +71,7 @@ export interface MessageMetadata {
 
 export type MessagePart =
   | { type: 'thinking'; content: string }
-  | { type: 'file'; action: 'create' | 'update' | 'delete' | 'rename'; path: string; newPath?: string }
+  | { type: 'file'; action: 'create' | 'update' | 'delete' | 'rename' | 'read'; path: string; newPath?: string }
   | { type: 'todo-list'; items: TodoItem[] }
 
 export interface TodoItem {
@@ -112,13 +113,66 @@ export interface AIModel {
 }
 
 export const AI_MODELS: AIModel[] = [
-  { id: 'opencode/minimax-m2.5-free', name: 'MiniMax M2.5', provider: 'MiniMax', description: 'High-performance coding model with strong reasoning' },
-  { id: 'anthropic/claude-sonnet-4-20250514', name: 'Claude Sonnet 4', provider: 'Anthropic', description: 'Balanced performance and intelligence' },
-  { id: 'openai/gpt-4.1', name: 'GPT-4.1', provider: 'OpenAI', description: 'Advanced reasoning and code generation' },
-  { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'Google', description: 'Multimodal AI with strong coding abilities' },
+  { id: 'opencode/minimax-m2.5-free', name: 'MiniMax M2.5', provider: 'MiniMax', description: 'Free, fast AI model for coding tasks' },
+  { id: 'opencode/mimo-v2-flash-free', name: 'Mimo V2 Flash', provider: 'Mimo', description: 'Free flash model optimized for code generation' },
+  { id: 'opencode/nemotron-3-super-free', name: 'Nemotron 3 Super', provider: 'NVIDIA', description: 'Free NVIDIA model with strong reasoning capabilities' },
+  { id: 'opencode/gpt-5-nano', name: 'GPT-5 Nano', provider: 'OpenAI', description: 'Compact free model with GPT-5 intelligence' },
+  { id: 'opencode/big-pickle', name: 'Big Pickle', provider: 'OpenCode', description: 'Free community model for general coding' },
 ]
 
 export const DEFAULT_MODEL_ID = AI_MODELS[0].id
+
+// ── Streaming event types (mirroring server StreamEvent) ─────────────
+
+export type StreamEvent =
+  | { type: 'text-delta'; content: string }
+  | { type: 'thinking'; id: string; content: string; done: boolean }
+  | { type: 'file-op'; id: string; action: string; path: string; newPath?: string; status: 'running' | 'completed' | 'error'; tool: string }
+  | { type: 'todo'; items: StreamTodoItem[] }
+  | { type: 'status'; status: string; message?: string }
+  | { type: 'file-change'; file: string }
+  | { type: 'error'; message: string }
+  | { type: 'complete' }
+
+export interface StreamTodoItem {
+  id: string
+  content: string
+  status: string
+  priority: string
+}
+
+export interface FileTreeEntry {
+  name: string
+  path: string
+  type: 'file' | 'directory'
+  children?: FileTreeEntry[]
+}
+
+// ── Streaming state for real-time rendering ──────────────────────────
+
+export interface ThinkingBlock {
+  id: string
+  content: string
+  done: boolean
+}
+
+export interface FileOpBlock {
+  id: string
+  action: string
+  path: string
+  newPath?: string
+  status: 'running' | 'completed' | 'error'
+  tool: string
+}
+
+export interface StreamingState {
+  text: string
+  thinkingBlocks: ThinkingBlock[]
+  fileOps: FileOpBlock[]
+  todos: StreamTodoItem[]
+  isStreaming: boolean
+  fileChanges: string[]
+}
 
 export interface ApiError {
   message: string

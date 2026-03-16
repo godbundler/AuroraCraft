@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { eq, or } from 'drizzle-orm'
 import crypto from 'crypto'
+import { mkdir } from 'fs/promises'
 import { db } from '../db/index.js'
 import { users } from '../db/schema/users.js'
 import { sessions } from '../db/schema/sessions.js'
@@ -84,6 +85,12 @@ export async function authRoutes(app: FastifyInstance) {
       expiresAt: new Date(Date.now() + SESSION_DURATION_MS),
     })
 
+    // Create user home directory (non-blocking, don't fail registration)
+    const homeDir = `/home/auroracraft-${username}`
+    mkdir(homeDir, { recursive: true }).catch((err) => {
+      app.log.warn({ err, homeDir }, 'Failed to create user home directory')
+    })
+
     reply.setCookie('session', token, setCookieOptions())
 
     return reply.status(201).send(user)
@@ -129,6 +136,12 @@ export async function authRoutes(app: FastifyInstance) {
       userId: user.id,
       token,
       expiresAt: new Date(Date.now() + SESSION_DURATION_MS),
+    })
+
+    // Ensure user home directory exists (defensive, non-blocking)
+    const homeDir = `/home/auroracraft-${user.username}`
+    mkdir(homeDir, { recursive: true }).catch((err) => {
+      app.log.warn({ err, homeDir }, 'Failed to ensure user home directory')
     })
 
     reply.setCookie('session', token, setCookieOptions())

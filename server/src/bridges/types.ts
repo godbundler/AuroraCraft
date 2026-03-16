@@ -5,11 +5,13 @@ export interface BridgeTask {
   context?: {
     opencodeSessionId?: string
     model?: string
+    projectLinkId?: string
     projectName?: string
     software?: string
     language?: string
     compiler?: string
     javaVersion?: string
+    projectDirectory?: string
   }
 }
 
@@ -22,7 +24,7 @@ export interface BridgeStreamEvent {
 
 export type MessagePart =
   | { type: 'thinking'; content: string }
-  | { type: 'file'; action: 'create' | 'update' | 'delete' | 'rename'; path: string; newPath?: string }
+  | { type: 'file'; action: 'create' | 'update' | 'delete' | 'rename' | 'read'; path: string; newPath?: string }
   | { type: 'todo-list'; items: TodoItem[] }
 
 export interface TodoItem {
@@ -48,4 +50,23 @@ export interface BridgeInterface {
   streamResponse(task: BridgeTask, onEvent: (event: BridgeStreamEvent) => void): Promise<BridgeResult>
   cancelExecution(sessionId: string): Promise<void>
   isAvailable(): boolean
+}
+
+// ── Streaming event types (for SSE forwarding to client) ─────────────
+
+export type StreamEvent =
+  | { type: 'text-delta'; content: string }
+  | { type: 'thinking'; id: string; content: string; done: boolean }
+  | { type: 'file-op'; id: string; action: string; path: string; newPath?: string; status: 'running' | 'completed' | 'error'; tool: string }
+  | { type: 'todo'; items: StreamTodoItem[] }
+  | { type: 'status'; status: 'running' | 'idle' | 'error'; message?: string }
+  | { type: 'file-change'; file: string }
+  | { type: 'error'; message: string }
+  | { type: 'complete' }
+
+export interface StreamTodoItem {
+  id: string
+  content: string
+  status: string
+  priority: string
 }

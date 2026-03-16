@@ -30,7 +30,7 @@ class BridgeRegistry {
 export const bridgeRegistry = new BridgeRegistry()
 
 // Register built-in bridges
-const opencodeBridge = new OpenCodeBridge()
+export const opencodeBridge = new OpenCodeBridge()
 bridgeRegistry.register(opencodeBridge)
 
 // Try to initialize bridges on startup (non-blocking)
@@ -38,4 +38,5 @@ opencodeBridge.initialize().catch(() => {
   // OpenCode might not be running yet, that's fine
 })
 
-export type { BridgeInterface, BridgeTask, BridgeResult, BridgeStreamEvent, MessagePart, TodoItem } from './types.js'
+export type { BridgeInterface, BridgeTask, BridgeResult, BridgeStreamEvent, MessagePart, TodoItem, StreamEvent, StreamTodoItem } from './types.js'
+export { SubscriptionManager } from './opencode.js'

@@ -9,11 +9,14 @@ export interface AgentExecutionContext {
   bridgeName: string
   model?: string
   opencodeSessionId?: string
+  projectLinkId?: string
   projectName?: string
   software?: string
   language?: string
   compiler?: string
   javaVersion?: string
+  projectDirectory?: string
+  userHomeDir?: string
 }
 
 export interface AgentExecutionResult {

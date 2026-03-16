@@ -9,6 +9,7 @@ export const projects = pgTable('projects', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   name: varchar('name', { length: 128 }).notNull(),
+  linkId: varchar('link_id', { length: 128 }).unique(),
   description: text('description'),
   status: projectStatusEnum('status').default('active').notNull(),
   software: varchar('software', { length: 32 }).default('paper').notNull(),

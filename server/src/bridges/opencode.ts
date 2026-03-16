@@ -1,5 +1,538 @@
-import type { BridgeInterface, BridgeTask, BridgeResult, BridgeStreamEvent, MessagePart, TodoItem } from './types.js'
+import type { BridgeInterface, BridgeTask, BridgeResult, BridgeStreamEvent, MessagePart, TodoItem, StreamEvent } from './types.js'
 import { env } from '../env.js'
+
+// ── OpenCode API response types ──────────────────────────────────────
+
+interface OpenCodeSession {
+  id: string
+  projectID?: string
+  directory?: string
+  title?: string
+}
+
+interface OpenCodePart {
+  id?: string
+  sessionID?: string
+  messageID?: string
+  type?: string
+  text?: string
+  tool?: string
+  callID?: string
+  state?: {
+    status?: string
+    input?: Record<string, unknown>
+    output?: string
+    title?: string
+    metadata?: Record<string, unknown>
+    error?: string
+    time?: { start?: number; end?: number }
+  }
+  time?: { start?: number; end?: number }
+  [key: string]: unknown
+}
+
+interface OpenCodeEvent {
+  type: string
+  properties: Record<string, unknown>
+}
+
+interface OpenCodeMessage {
+  info?: {
+    role?: string
+    sessionID?: string
+    id?: string
+    time?: { created?: number; completed?: number }
+    [key: string]: unknown
+  }
+  parts?: OpenCodePart[]
+  [key: string]: unknown
+}
+
+interface OpenCodeTodo {
+  id?: string
+  content?: string
+  status?: string
+  priority?: string
+}
+
+// ── File action mapping ──────────────────────────────────────────────
+
+type FileAction = 'create' | 'update' | 'delete' | 'rename' | 'read'
+
+const TOOL_TO_FILE_ACTION: Record<string, FileAction> = {
+  write: 'create', file_write: 'create', create: 'create', create_file: 'create', createFile: 'create',
+  edit: 'update', file_edit: 'update', str_replace: 'update', str_replace_editor: 'update',
+  patch: 'update', apply_diff: 'update', file_patch: 'update',
+  delete: 'delete', file_delete: 'delete', remove: 'delete', rm: 'delete',
+  rename: 'rename', move: 'rename', mv: 'rename', file_rename: 'rename',
+  read: 'read', file_read: 'read', cat: 'read', read_file: 'read', readFile: 'read',
+}
+
+function extractFilePath(input: Record<string, unknown>): string {
+  return String(input.path ?? input.file_path ?? input.filename ?? input.file ?? input.target ?? input.source ?? '')
+}
+
+function extractNewPath(input: Record<string, unknown>): string {
+  return String(input.new_path ?? input.destination ?? input.target ?? input.newPath ?? '')
+}
+
+// ── SSE Connection (one per project directory) ───────────────────────
+
+class SSEConnection {
+  private controller: AbortController | null = null
+  private listeners = new Map<string, Set<(event: StreamEvent) => void>>()
+  private partTypes = new Map<string, string>()
+  private eventBuffer = new Map<string, StreamEvent[]>()
+  private readonly MAX_BUFFER_SIZE = 500
+  private idleTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+  constructor(
+    private baseUrl: string,
+    private directory: string,
+  ) {}
+
+  private makeRelativePath(filePath: string): string {
+    if (filePath.startsWith(this.directory + '/')) {
+      return filePath.slice(this.directory.length + 1)
+    }
+    if (filePath.startsWith('/')) {
+      const lastSlash = filePath.lastIndexOf('/')
+      return lastSlash >= 0 ? filePath.slice(lastSlash + 1) : filePath
+    }
+    return filePath
+  }
+
+  get listenerCount(): number {
+    let count = 0
+    for (const set of this.listeners.values()) count += set.size
+    return count
+  }
+
+  addListener(sessionId: string, callback: (event: StreamEvent) => void) {
+    let set = this.listeners.get(sessionId)
+    if (!set) {
+      set = new Set()
+      this.listeners.set(sessionId, set)
+    }
+    set.add(callback)
+
+    // Replay any buffered events that arrived before this listener subscribed
+    const buffered = this.eventBuffer.get(sessionId)
+    if (buffered && buffered.length > 0) {
+      for (const event of buffered) {
+        callback(event)
+      }
+    }
+  }
+
+  removeListener(sessionId: string, callback: (event: StreamEvent) => void) {
+    const set = this.listeners.get(sessionId)
+    if (set) {
+      set.delete(callback)
+      if (set.size === 0) {
+        this.listeners.delete(sessionId)
+        this.cancelIdleComplete(sessionId)
+      }
+    }
+  }
+
+  connect() {
+    if (this.controller) return
+    this.controller = new AbortController()
+    this.consumeStream(this.controller.signal).catch(() => {})
+  }
+
+  disconnect() {
+    this.controller?.abort()
+    this.controller = null
+    this.eventBuffer.clear()
+    for (const timer of this.idleTimers.values()) clearTimeout(timer)
+    this.idleTimers.clear()
+  }
+
+  private async consumeStream(signal: AbortSignal) {
+    while (!signal.aborted) {
+      this.partTypes.clear()
+      try {
+        const url = `${this.baseUrl}/event`
+        const response = await fetch(url, {
+          headers: { Accept: 'text/event-stream' },
+          signal,
+        })
+
+        if (!response.ok || !response.body) {
+          await this.delay(2000, signal)
+          continue
+        }
+
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (!signal.aborted) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          buffer += decoder.decode(value, { stream: true })
+
+          let idx: number
+          while ((idx = buffer.indexOf('\n\n')) !== -1) {
+            const block = buffer.slice(0, idx)
+            buffer = buffer.slice(idx + 2)
+
+            let data = ''
+            for (const line of block.split('\n')) {
+              if (line.startsWith('data: ')) data += line.slice(6)
+              else if (line.startsWith('data:')) data += line.slice(5)
+            }
+
+            if (data) {
+              try {
+                this.routeEvent(JSON.parse(data) as OpenCodeEvent)
+              } catch { /* ignore parse errors */ }
+            }
+          }
+        }
+      } catch {
+        if (signal.aborted) return
+      }
+
+      await this.delay(2000, signal)
+    }
+  }
+
+  private delay(ms: number, signal: AbortSignal): Promise<void> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(resolve, ms)
+      signal.addEventListener('abort', () => { clearTimeout(timer); resolve() }, { once: true })
+    })
+  }
+
+  private routeEvent(event: OpenCodeEvent) {
+    // Auto-approve permission requests so tool calls (write, edit, etc.) aren't blocked
+    if (event.type === 'permission.updated') {
+      const props = event.properties as { id?: string; sessionID?: string }
+      if (props.id && props.sessionID) {
+        this.approvePermission(props.sessionID, props.id)
+      }
+    }
+
+    const { sessionId, streamEvents } = this.transformEvent(event)
+    if (streamEvents.length === 0) return
+
+    for (const streamEvent of streamEvents) {
+      if (sessionId) {
+        // Buffer non-terminal events for late-joining listeners (e.g. SSE endpoint)
+        // 'complete' is a terminal signal that should only be dispatched live, never replayed
+        if (streamEvent.type !== 'complete') {
+          let buffer = this.eventBuffer.get(sessionId)
+          if (!buffer) {
+            buffer = []
+            this.eventBuffer.set(sessionId, buffer)
+          }
+          buffer.push(streamEvent)
+          if (buffer.length > this.MAX_BUFFER_SIZE) {
+            buffer.splice(0, buffer.length - this.MAX_BUFFER_SIZE)
+          }
+        }
+
+        // Dispatch to existing listeners
+        const listeners = this.listeners.get(sessionId)
+        if (listeners) {
+          for (const cb of [...listeners]) cb(streamEvent)
+        }
+      } else {
+        // Broadcast to all listeners in this directory
+        for (const [, listeners] of this.listeners) {
+          for (const cb of [...listeners]) cb(streamEvent)
+        }
+      }
+    }
+  }
+
+  private transformEvent(event: OpenCodeEvent): { sessionId: string | null; streamEvents: StreamEvent[] } {
+    const events: StreamEvent[] = []
+
+    switch (event.type) {
+      case 'message.part.delta': {
+        const props = event.properties as { sessionID?: string; partID?: string; field?: string; delta?: string }
+        if (!props.delta) return { sessionId: props.sessionID ?? null, streamEvents: [] }
+
+        const partType = this.partTypes.get(props.partID ?? '')
+        if (partType === 'text') {
+          events.push({ type: 'text-delta', content: props.delta })
+        } else if (partType === 'reasoning') {
+          events.push({ type: 'thinking', id: props.partID ?? '', content: props.delta, done: false })
+        }
+        return { sessionId: props.sessionID ?? null, streamEvents: events }
+      }
+
+      case 'message.part.updated': {
+        const props = event.properties as { part?: OpenCodePart }
+        const part = props.part
+        if (!part) return { sessionId: null, streamEvents: [] }
+
+        const sessionId = part.sessionID ?? null
+
+        if (part.id && part.type) {
+          this.partTypes.set(part.id, part.type)
+        }
+
+        if (part.type === 'reasoning' && part.time?.end) {
+          events.push({ type: 'thinking', id: part.id ?? '', content: '', done: true })
+        } else if (part.type === 'tool') {
+          const toolEvent = this.transformToolPart(part)
+          if (toolEvent) events.push(toolEvent)
+        }
+
+        return { sessionId, streamEvents: events }
+      }
+
+      case 'session.status': {
+        const props = event.properties as { sessionID?: string; status?: { type?: string } }
+        const statusType = props.status?.type
+        const sessionId = props.sessionID ?? null
+        if (statusType === 'busy') {
+          if (sessionId) this.cancelIdleComplete(sessionId)
+          events.push({ type: 'status', status: 'running' })
+        } else if (statusType === 'idle') {
+          events.push({ type: 'status', status: 'idle' })
+        }
+        return { sessionId, streamEvents: events }
+      }
+
+      case 'session.idle': {
+        const props = event.properties as { sessionID?: string }
+        const sessionId = props.sessionID ?? null
+        if (sessionId) {
+          this.scheduleIdleComplete(sessionId)
+        }
+        return { sessionId, streamEvents: [] }
+      }
+
+      case 'todo.updated': {
+        const props = event.properties as { sessionID?: string; todos?: OpenCodeTodo[] }
+        events.push({
+          type: 'todo',
+          items: (props.todos ?? []).map((t) => ({
+            id: t.id ?? '',
+            content: t.content ?? '',
+            status: t.status ?? 'pending',
+            priority: t.priority ?? 'medium',
+          })),
+        })
+        return { sessionId: props.sessionID ?? null, streamEvents: events }
+      }
+
+      case 'session.diff': {
+        const props = event.properties as {
+          sessionID?: string
+          diff?: Array<{ file?: string; status?: string; additions?: number; deletions?: number }>
+        }
+        for (const entry of props.diff ?? []) {
+          if (!entry.file) continue
+          let action: string
+          if (entry.status === 'added') action = 'create'
+          else if (entry.status === 'deleted') action = 'delete'
+          else action = 'update'
+          events.push({
+            type: 'file-op',
+            id: entry.file,
+            action,
+            path: this.makeRelativePath(entry.file),
+            status: 'completed',
+            tool: 'session.diff',
+          })
+        }
+        return { sessionId: props.sessionID ?? null, streamEvents: events }
+      }
+
+      case 'file.edited': {
+        return { sessionId: null, streamEvents: [] }
+      }
+
+      case 'message.updated': {
+        const props = event.properties as {
+          info?: {
+            sessionID?: string
+            role?: string
+            time?: { created?: number; completed?: number }
+            error?: { name?: string; data?: { message?: string } }
+          }
+        }
+        const sessionId = props.info?.sessionID ?? null
+        if (props.info?.error) {
+          events.push({ type: 'error', message: props.info.error.data?.message ?? 'Unknown error' })
+        }
+        if (props.info?.role === 'assistant' && props.info?.time?.completed) {
+          if (sessionId) this.scheduleIdleComplete(sessionId)
+        }
+        return { sessionId, streamEvents: events }
+      }
+
+      case 'session.error': {
+        const props = event.properties as { sessionID?: string; error?: string }
+        events.push({ type: 'error', message: props.error ?? 'Session error' })
+        return { sessionId: props.sessionID ?? null, streamEvents: events }
+      }
+
+      default:
+        return { sessionId: null, streamEvents: [] }
+    }
+  }
+
+  private approvePermission(sessionId: string, permissionId: string) {
+    fetch(`${this.baseUrl}/session/${sessionId}/permissions/${permissionId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ response: 'always' }),
+      signal: AbortSignal.timeout(5000),
+    }).catch(() => { /* ignore approval errors */ })
+  }
+
+  private scheduleIdleComplete(sessionId: string) {
+    this.cancelIdleComplete(sessionId)
+    // Primary completion mechanism: schedule a debounced complete event.
+    // If another step starts (session.status: busy), the timer is cancelled.
+    // 10s is long enough to cover gaps between multi-step tool calls,
+    // but short enough that users don't wait long after the task finishes.
+    const timer = setTimeout(() => {
+      this.idleTimers.delete(sessionId)
+      this.dispatchToSession(sessionId, { type: 'complete' })
+    }, 10_000)
+    this.idleTimers.set(sessionId, timer)
+  }
+
+  private cancelIdleComplete(sessionId: string) {
+    const timer = this.idleTimers.get(sessionId)
+    if (timer) {
+      clearTimeout(timer)
+      this.idleTimers.delete(sessionId)
+    }
+  }
+
+  clearBuffer(sessionId: string) {
+    this.eventBuffer.delete(sessionId)
+    this.cancelIdleComplete(sessionId)
+  }
+
+  private dispatchToSession(sessionId: string, event: StreamEvent) {
+    // Buffer non-terminal events for late-joining listeners
+    if (event.type !== 'complete') {
+      let buffer = this.eventBuffer.get(sessionId)
+      if (!buffer) {
+        buffer = []
+        this.eventBuffer.set(sessionId, buffer)
+      }
+      buffer.push(event)
+      if (buffer.length > this.MAX_BUFFER_SIZE) {
+        buffer.splice(0, buffer.length - this.MAX_BUFFER_SIZE)
+      }
+    }
+    // Always dispatch to live listeners
+    const listeners = this.listeners.get(sessionId)
+    if (listeners) {
+      for (const cb of [...listeners]) cb(event)
+    }
+  }
+
+  private transformToolPart(part: OpenCodePart): StreamEvent | null {
+    const toolName = (part.tool ?? '').toLowerCase()
+    const action = TOOL_TO_FILE_ACTION[toolName]
+
+    const state = part.state
+    if (!state) return null
+
+    let status: 'running' | 'completed' | 'error'
+    if (state.status === 'completed') status = 'completed'
+    else if (state.status === 'error') status = 'error'
+    else status = 'running'
+
+    if (!action) {
+      const input = state.input ?? {}
+      const label = String(input.path ?? input.pattern ?? input.command ?? toolName)
+      return {
+        type: 'file-op',
+        id: part.callID ?? part.id ?? '',
+        action: 'tool',
+        path: label,
+        status,
+        tool: part.tool ?? toolName,
+      }
+    }
+
+    const input = state.input ?? {}
+    const rawPath = extractFilePath(input)
+    if (!rawPath) return null
+
+    const path = this.makeRelativePath(rawPath)
+    const rawNewPath = action === 'rename' ? extractNewPath(input) : undefined
+
+    return {
+      type: 'file-op',
+      id: part.callID ?? part.id ?? '',
+      action,
+      path,
+      newPath: rawNewPath ? this.makeRelativePath(rawNewPath) : undefined,
+      status,
+      tool: toolName,
+    }
+  }
+}
+
+// ── Subscription Manager ─────────────────────────────────────────────
+
+export class SubscriptionManager {
+  private connections = new Map<string, SSEConnection>()
+  private disconnectTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+  constructor(private baseUrl: string) {}
+
+  subscribe(
+    directory: string,
+    opencodeSessionId: string,
+    callback: (event: StreamEvent) => void,
+  ): () => void {
+    // Cancel any pending disconnect for this directory
+    const pendingTimer = this.disconnectTimers.get(directory)
+    if (pendingTimer) {
+      clearTimeout(pendingTimer)
+      this.disconnectTimers.delete(directory)
+    }
+
+    let conn = this.connections.get(directory)
+    if (!conn) {
+      conn = new SSEConnection(this.baseUrl, directory)
+      this.connections.set(directory, conn)
+      conn.connect()
+    }
+
+    conn.addListener(opencodeSessionId, callback)
+
+    const connection = conn
+    return () => {
+      connection.removeListener(opencodeSessionId, callback)
+      if (connection.listenerCount === 0) {
+        // Grace period: keep connection + buffer alive for late-joining subscribers
+        const timer = setTimeout(() => {
+          this.disconnectTimers.delete(directory)
+          if (connection.listenerCount === 0) {
+            connection.disconnect()
+            this.connections.delete(directory)
+          }
+        }, 30_000)
+        this.disconnectTimers.set(directory, timer)
+      }
+    }
+  }
+
+  clearBuffer(directory: string, sessionId: string) {
+    const conn = this.connections.get(directory)
+    if (conn) conn.clearBuffer(sessionId)
+  }
+}
+
+// ── OpenCode Bridge ──────────────────────────────────────────────────
 
 export class OpenCodeBridge implements BridgeInterface {
   name = 'opencode'
@@ -7,9 +540,11 @@ export class OpenCodeBridge implements BridgeInterface {
   private activeSessions = new Map<string, AbortController>()
   private available = false
   private lastAvailabilityCheck = 0
+  readonly subscriptionManager: SubscriptionManager
 
   constructor() {
     this.baseUrl = env.OPENCODE_URL
+    this.subscriptionManager = new SubscriptionManager(this.baseUrl)
   }
 
   async initialize(): Promise<void> {
@@ -31,7 +566,6 @@ export class OpenCodeBridge implements BridgeInterface {
   }
 
   isAvailable(): boolean {
-    // Re-check every 30 seconds
     if (Date.now() - this.lastAvailabilityCheck > 30000) {
       this.checkAvailability()
     }
@@ -42,12 +576,67 @@ export class OpenCodeBridge implements BridgeInterface {
     return this.streamResponse(task, () => {})
   }
 
+  async createOrResolveSession(directory: string, title?: string, existingId?: string): Promise<string> {
+    if (existingId) {
+      try {
+        const res = await fetch(`${this.baseUrl}/session/${existingId}`, {
+          method: 'GET',
+          signal: AbortSignal.timeout(5000),
+        })
+        if (res.ok) return existingId
+      } catch { /* session not found, create new */ }
+    }
+
+    const url = new URL(`${this.baseUrl}/session`)
+    if (directory) url.searchParams.set('directory', directory)
+
+    const body: Record<string, string> = {}
+    if (title) body.title = title
+
+    const res = await fetch(url.toString(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10000),
+    })
+
+    if (!res.ok) {
+      throw new Error(`Failed to create OpenCode session: status ${res.status}`)
+    }
+
+    const session = (await res.json()) as OpenCodeSession
+    return session.id
+  }
+
+  async sendPromptAsync(sessionId: string, prompt: string, model?: string): Promise<void> {
+    const body: Record<string, unknown> = {
+      parts: [{ type: 'text', text: prompt }],
+    }
+
+    if (model && model.includes('/')) {
+      const [providerID, ...rest] = model.split('/')
+      const modelID = rest.join('/')
+      body.model = { providerID, modelID }
+    }
+
+    const res = await fetch(`${this.baseUrl}/session/${sessionId}/prompt_async`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15000),
+    })
+
+    if (res.status !== 204 && !res.ok) {
+      const errText = await res.text().catch(() => 'Unknown error')
+      throw new Error(`Failed to send prompt: status ${res.status}: ${errText}`)
+    }
+  }
+
   async streamResponse(task: BridgeTask, onEvent: (event: BridgeStreamEvent) => void): Promise<BridgeResult> {
     const controller = new AbortController()
     this.activeSessions.set(task.sessionId, controller)
 
     try {
-      // Re-check availability before each execution
       const reachable = await this.checkAvailability()
       if (!reachable) {
         return {
@@ -57,110 +646,147 @@ export class OpenCodeBridge implements BridgeInterface {
         }
       }
 
-      onEvent({
-        type: 'status',
-        content: 'Connecting to OpenCode...',
-        timestamp: new Date().toISOString(),
-      })
+      onEvent({ type: 'status', content: 'Connecting to OpenCode...', timestamp: new Date().toISOString() })
 
-      // Create or reuse OpenCode session
-      const opencodeSessionId = await this.resolveOpenCodeSession(task)
+      const directory = task.context?.projectDirectory ?? '.'
+      const opencodeSessionId = await this.createOrResolveSession(
+        directory,
+        task.context?.projectLinkId ?? task.projectId,
+        task.context?.opencodeSessionId,
+      )
 
-      onEvent({
-        type: 'status',
-        content: 'Sending prompt to AI agent...',
-        timestamp: new Date().toISOString(),
-      })
+      onEvent({ type: 'status', content: 'Sending prompt to AI agent...', timestamp: new Date().toISOString() })
 
-      // Build the prompt with project context
-      const contextPrompt = this.buildContextPrompt(task)
+      // Clear stale buffered events from previous messages so they aren't replayed
+      this.subscriptionManager.clearBuffer(directory, opencodeSessionId)
 
-      // Send the chat message to OpenCode — this blocks until the agent finishes
-      const chatResponse = await fetch(`${this.baseUrl}/session/${opencodeSessionId}/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: contextPrompt }),
-        signal: controller.signal,
-      })
+      // Subscribe to events for real-time forwarding + completion detection
+      const collectedText: string[] = []
+      const thinkingParts = new Map<string, { content: string; done: boolean }>()
+      const fileParts: MessagePart[] = []
+      let latestTodos: TodoItem[] = []
+      let resolved = false
 
-      if (!chatResponse.ok) {
-        const errText = await chatResponse.text().catch(() => 'Unknown error')
-        return {
-          success: false,
-          output: '',
-          error: `OpenCode returned status ${chatResponse.status}: ${errText}`,
-        }
-      }
+      const completionPromise = new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          if (!resolved) { resolved = true; reject(new Error('Session timed out after 5 minutes')) }
+        }, 300000)
 
-      onEvent({
-        type: 'status',
-        content: 'AI agent completed. Processing response...',
-        timestamp: new Date().toISOString(),
-      })
+        let unsub: (() => void) | null = null
+        unsub = this.subscriptionManager.subscribe(directory, opencodeSessionId, (event) => {
+          if (controller.signal.aborted || resolved) return
 
-      // Fetch messages from the OpenCode session to get the full response
-      const messagesRes = await fetch(`${this.baseUrl}/session/${opencodeSessionId}/message`, {
-        method: 'GET',
-        signal: AbortSignal.timeout(10000),
-      })
+          switch (event.type) {
+            case 'text-delta':
+              collectedText.push(event.content)
+              onEvent({ type: 'output', content: event.content, timestamp: new Date().toISOString() })
+              break
 
-      let textOutput = ''
-      const parts: MessagePart[] = []
+            case 'thinking': {
+              const existing = thinkingParts.get(event.id) ?? { content: '', done: false }
+              existing.content += event.content
+              existing.done = event.done
+              thinkingParts.set(event.id, existing)
+              onEvent({ type: 'thinking', content: event.content, timestamp: new Date().toISOString() })
+              break
+            }
 
-      if (messagesRes.ok) {
-        const messages = await messagesRes.json() as OpenCodeMessage[]
-        // Get the latest assistant message(s) since our prompt
-        const assistantMessages = messages.filter((m) => m.role === 'assistant')
-        const lastAssistant = assistantMessages[assistantMessages.length - 1]
-
-        if (lastAssistant) {
-          const parsed = this.parseOpenCodeMessage(lastAssistant)
-          textOutput = parsed.text
-          parts.push(...parsed.parts)
-
-          // Emit events for each part
-          for (const part of parsed.parts) {
-            if (part.type === 'thinking') {
-              onEvent({ type: 'thinking', content: part.content, timestamp: new Date().toISOString() })
-            } else if (part.type === 'file') {
+            case 'file-op': {
+              if ((event.status === 'completed' || event.status === 'error') && event.action !== 'tool') {
+                fileParts.push({
+                  type: 'file',
+                  action: event.action as 'create' | 'update' | 'delete' | 'rename' | 'read',
+                  path: event.path,
+                  newPath: event.newPath,
+                })
+              }
+              const verb = event.status === 'running'
+                ? `${event.action.replace(/e$/, '')}ing`
+                : `${event.action}${event.action.endsWith('e') ? 'd' : 'ed'}`
               onEvent({
                 type: 'file-op',
-                content: `${part.action}: ${part.path}`,
+                content: `${verb} ${event.path}`,
                 timestamp: new Date().toISOString(),
-                metadata: { action: part.action, path: part.path, newPath: part.newPath },
+                metadata: { action: event.action, path: event.path, newPath: event.newPath, status: event.status },
               })
-            } else if (part.type === 'todo-list') {
-              onEvent({
-                type: 'todo',
-                content: JSON.stringify(part.items),
-                timestamp: new Date().toISOString(),
-              })
+              break
             }
+
+            case 'todo':
+              latestTodos = event.items.map((t) => ({
+                text: t.content,
+                status: t.status === 'completed'
+                  ? 'completed' as const
+                  : t.status === 'in_progress'
+                    ? 'in-progress' as const
+                    : 'pending' as const,
+              }))
+              onEvent({ type: 'todo', content: JSON.stringify(event.items), timestamp: new Date().toISOString() })
+              break
+
+            case 'status':
+              onEvent({ type: 'status', content: event.status, timestamp: new Date().toISOString() })
+              break
+
+            case 'complete':
+              if (!resolved) {
+                resolved = true
+                clearTimeout(timeout)
+                unsub?.()
+                resolve()
+              }
+              break
+
+            case 'error':
+              onEvent({ type: 'error', content: event.message, timestamp: new Date().toISOString() })
+              break
           }
-        }
+        })
+
+        controller.signal.addEventListener('abort', () => {
+          if (!resolved) {
+            resolved = true
+            clearTimeout(timeout)
+            unsub?.()
+            reject(new Error('Execution cancelled'))
+          }
+        }, { once: true })
+      })
+
+      // Build context prompt and send to OpenCode
+      const contextPrompt = this.buildContextPrompt(task)
+      await this.sendPromptAsync(opencodeSessionId, contextPrompt, task.context?.model)
+
+      // Wait for completion via SSE events, with polling fallback
+      const pollFallback = this.pollUntilIdle(opencodeSessionId, controller.signal)
+      await Promise.race([completionPromise, pollFallback]).catch(() => {})
+
+      // If still not resolved, give a brief window then proceed
+      if (!resolved) {
+        await new Promise((r) => setTimeout(r, 1000))
       }
 
-      // If we didn't get text from messages, try to use the chat response body
-      if (!textOutput) {
-        try {
-          const chatBody = await chatResponse.json() as Record<string, unknown>
-          if (typeof chatBody === 'object' && chatBody !== null) {
-            if (typeof chatBody.text === 'string') textOutput = chatBody.text
-            else if (typeof chatBody.content === 'string') textOutput = chatBody.content
-            else if (typeof chatBody.output === 'string') textOutput = chatBody.output
-            else textOutput = JSON.stringify(chatBody)
-          }
-        } catch {
-          // Chat response might have already been consumed or be non-JSON
-          textOutput = 'Agent completed the task.'
-        }
-      }
+      onEvent({ type: 'status', content: 'AI agent completed. Processing response...', timestamp: new Date().toISOString() })
+
+      // Fetch full messages from OpenCode for accurate persistence
+      const fullText = await this.fetchAssistantText(opencodeSessionId)
+      const outputText = fullText || collectedText.join('')
 
       onEvent({ type: 'complete', content: 'Done', timestamp: new Date().toISOString() })
 
+      // Assemble metadata parts
+      const parts: MessagePart[] = []
+      for (const [, thinking] of thinkingParts) {
+        parts.push({ type: 'thinking', content: thinking.content })
+      }
+      parts.push(...fileParts)
+      if (latestTodos.length > 0) {
+        parts.push({ type: 'todo-list', items: latestTodos })
+      }
+
       return {
         success: true,
-        output: textOutput,
+        output: outputText,
         metadata: {
           opencodeSessionId,
           parts: parts.length > 0 ? parts : undefined,
@@ -185,41 +811,61 @@ export class OpenCodeBridge implements BridgeInterface {
     }
   }
 
-  private async resolveOpenCodeSession(task: BridgeTask): Promise<string> {
-    const existingId = task.context?.opencodeSessionId
+  // ── Private helpers ──────────────────────────────────────────────
 
-    // Try to reuse existing OpenCode session
-    if (existingId) {
+  private async pollUntilIdle(sessionId: string, signal: AbortSignal): Promise<void> {
+    // Initial delay before polling starts
+    await new Promise((r) => setTimeout(r, 5000))
+
+    while (!signal.aborted) {
       try {
-        const res = await fetch(`${this.baseUrl}/session/${existingId}`, {
+        const res = await fetch(`${this.baseUrl}/session/${sessionId}/message`, {
           method: 'GET',
           signal: AbortSignal.timeout(5000),
         })
-        if (res.ok) return existingId
-      } catch {
-        // Session doesn't exist anymore, create a new one
+        if (res.ok) {
+          const messages = (await res.json()) as OpenCodeMessage[]
+          const lastAssistant = [...messages].reverse().find((m) => m.info?.role === 'assistant')
+          if (lastAssistant?.info?.time?.completed) return
+        }
+      } catch { /* ignore polling errors */ }
+
+      await new Promise((r) => setTimeout(r, 3000))
+    }
+  }
+
+  private async fetchAssistantText(sessionId: string): Promise<string> {
+    try {
+      const res = await fetch(`${this.baseUrl}/session/${sessionId}/message`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(10000),
+      })
+      if (!res.ok) return ''
+
+      const messages = (await res.json()) as OpenCodeMessage[]
+      const assistantMessages = messages.filter((m) => m.info?.role === 'assistant')
+      const lastAssistant = assistantMessages[assistantMessages.length - 1]
+      if (!lastAssistant) return ''
+
+      return this.extractTextFromMessage(lastAssistant)
+    } catch {
+      return ''
+    }
+  }
+
+  private extractTextFromMessage(message: OpenCodeMessage): string {
+    const textChunks: string[] = []
+
+    if (Array.isArray(message.parts)) {
+      for (const part of message.parts) {
+        if (part.type === 'text' || part.type === 'text-delta' || part.type === 'text-start') {
+          const text = part.text ?? (part as Record<string, unknown>).content ?? ''
+          if (typeof text === 'string' && text) textChunks.push(text)
+        }
       }
     }
 
-    // Create a new OpenCode session with model if specified
-    const sessionBody: Record<string, string> = {}
-    if (task.context?.model) {
-      sessionBody.model = task.context.model
-    }
-
-    const res = await fetch(`${this.baseUrl}/session`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(sessionBody),
-      signal: AbortSignal.timeout(10000),
-    })
-
-    if (!res.ok) {
-      throw new Error(`Failed to create OpenCode session: status ${res.status}`)
-    }
-
-    const session = await res.json() as { id: string }
-    return session.id
+    return textChunks.join('')
   }
 
   private buildContextPrompt(task: BridgeTask): string {
@@ -227,12 +873,17 @@ export class OpenCodeBridge implements BridgeInterface {
     if (!ctx?.projectName) return task.prompt
 
     const lines: string[] = []
-    lines.push(`[AuroraCraft Project Context]`)
+    lines.push('[AuroraCraft Project Context]')
     lines.push(`Project: ${ctx.projectName}`)
     if (ctx.software) lines.push(`Server Software: ${ctx.software}`)
     if (ctx.language) lines.push(`Language: ${ctx.language}`)
     if (ctx.compiler) lines.push(`Build Tool: ${ctx.compiler}`)
     if (ctx.javaVersion) lines.push(`Java Version: ${ctx.javaVersion}`)
+    if (ctx.projectDirectory) {
+      lines.push('')
+      lines.push(`Working Directory: ${ctx.projectDirectory}`)
+      lines.push(`IMPORTANT: Your current working directory may NOT be the project directory. You MUST create all files using absolute paths under ${ctx.projectDirectory}/. For example, to create build.gradle, write to ${ctx.projectDirectory}/build.gradle. Do NOT create files in any other location.`)
+    }
     lines.push('')
     lines.push('RESTRICTIONS:')
     lines.push('- Do NOT execute build commands (mvn, gradle, javac, make)')
@@ -244,129 +895,4 @@ export class OpenCodeBridge implements BridgeInterface {
 
     return lines.join('\n')
   }
-
-  private parseOpenCodeMessage(message: OpenCodeMessage): { text: string; parts: MessagePart[] } {
-    const parts: MessagePart[] = []
-    const textChunks: string[] = []
-
-    // If message has parts array, parse each part
-    if (Array.isArray(message.parts)) {
-      for (const part of message.parts) {
-        const partType = part.type ?? ''
-
-        // Text content
-        if (partType === 'text' || partType === 'text-delta' || partType === 'text-start') {
-          const text = part.content ?? part.text ?? ''
-          if (text) textChunks.push(text)
-        }
-
-        // Thinking / reasoning
-        else if (partType === 'reasoning' || partType === 'reasoning-delta' || partType === 'thinking') {
-          const content = part.content ?? part.text ?? ''
-          if (content) parts.push({ type: 'thinking', content })
-        }
-
-        // Tool calls — file operations
-        else if (partType === 'tool-call' || partType === 'tool_call' || partType === 'tool-invocation') {
-          const toolName = (part.tool ?? part.name ?? part.toolName ?? '').toLowerCase()
-          const args = part.args ?? part.arguments ?? part.input ?? {}
-
-          if (toolName === 'write' || toolName === 'file_write' || toolName === 'create') {
-            const filePath = args.path ?? args.file_path ?? args.filename ?? ''
-            if (filePath) parts.push({ type: 'file', action: 'create', path: String(filePath) })
-          } else if (toolName === 'edit' || toolName === 'file_edit' || toolName === 'str_replace' || toolName === 'patch') {
-            const filePath = args.path ?? args.file_path ?? args.filename ?? ''
-            if (filePath) parts.push({ type: 'file', action: 'update', path: String(filePath) })
-          } else if (toolName === 'delete' || toolName === 'file_delete' || toolName === 'remove') {
-            const filePath = args.path ?? args.file_path ?? args.filename ?? ''
-            if (filePath) parts.push({ type: 'file', action: 'delete', path: String(filePath) })
-          } else if (toolName === 'rename' || toolName === 'move' || toolName === 'file_rename') {
-            const oldPath = args.path ?? args.old_path ?? args.source ?? ''
-            const newPath = args.new_path ?? args.destination ?? args.target ?? ''
-            if (oldPath) parts.push({ type: 'file', action: 'rename', path: String(oldPath), newPath: String(newPath) })
-          }
-          // Skip bash/shell commands — not shown in UI per requirements
-        }
-
-        // Todo items
-        else if (partType === 'todo' || partType === 'todo-list' || partType === 'plan') {
-          const items = this.parseTodoItems(part)
-          if (items.length > 0) parts.push({ type: 'todo-list', items })
-        }
-      }
-    }
-
-    // If no parts found, use message content directly
-    if (textChunks.length === 0) {
-      const fallback = message.content ?? ''
-      if (fallback) textChunks.push(fallback)
-    }
-
-    return { text: textChunks.join(''), parts }
-  }
-
-  private parseTodoItems(part: OpenCodePart): TodoItem[] {
-    const items: TodoItem[] = []
-
-    // Try 'items' array in the part
-    const rawItems = part.items ?? part.todos ?? part.tasks ?? []
-    if (Array.isArray(rawItems)) {
-      for (const item of rawItems) {
-        if (typeof item === 'string') {
-          items.push({ text: item, status: 'pending' })
-        } else if (typeof item === 'object' && item !== null) {
-          const text = item.text ?? item.title ?? item.description ?? String(item)
-          const status = item.status === 'completed' || item.done === true
-            ? 'completed'
-            : item.status === 'in-progress' || item.status === 'running'
-              ? 'in-progress'
-              : 'pending'
-          items.push({ text: String(text), status })
-        }
-      }
-    }
-
-    // Try parsing content as a todo list (markdown checkbox format)
-    const content = part.content ?? part.text ?? ''
-    if (typeof content === 'string' && items.length === 0) {
-      const lines = content.split('\n')
-      for (const line of lines) {
-        const checkMatch = line.match(/^[-*]\s*\[([ xX✓])\]\s*(.+)/)
-        if (checkMatch) {
-          const done = checkMatch[1] !== ' '
-          items.push({ text: checkMatch[2].trim(), status: done ? 'completed' : 'pending' })
-        }
-      }
-    }
-
-    return items
-  }
-}
-
-// Types for parsing OpenCode responses (flexible to handle various shapes)
-interface OpenCodePart {
-  type?: string
-  content?: string
-  text?: string
-  tool?: string
-  name?: string
-  toolName?: string
-  args?: Record<string, unknown>
-  arguments?: Record<string, unknown>
-  input?: Record<string, unknown>
-  items?: Array<Record<string, unknown>>
-  todos?: Array<Record<string, unknown>>
-  tasks?: Array<Record<string, unknown>>
-  done?: boolean
-  status?: string
-  [key: string]: unknown
-}
-
-interface OpenCodeMessage {
-  id?: string
-  sessionId?: string
-  role?: string
-  content?: string
-  parts?: OpenCodePart[]
-  [key: string]: unknown
 }

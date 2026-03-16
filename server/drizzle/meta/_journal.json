@@ -22,6 +22,20 @@
       "when": 1773090000000,
       "tag": "0002_opencode_bridge",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1773573132779,
+      "tag": "0003_wakeful_mesmero",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1773586542862,
+      "tag": "0004_hard_corsair",
+      "breakpoints": true
     }
   ]
 }

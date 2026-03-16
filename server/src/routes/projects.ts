@@ -1,6 +1,9 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { eq, and, desc } from 'drizzle-orm'
+import crypto from 'crypto'
+import { mkdir, readdir } from 'fs/promises'
+import path from 'path'
 import { db } from '../db/index.js'
 import { projects } from '../db/schema/projects.js'
 import { authMiddleware } from '../middleware/auth.js'
@@ -23,6 +26,53 @@ const updateProjectSchema = z.object({
   javaVersion: z.string().max(8).optional(),
   compiler: z.enum(['maven', 'gradle']).optional(),
 })
+
+function generateLinkId(name: string): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80)
+  const hex = crypto.randomBytes(3).toString('hex')
+  return `${slug}-${hex}`
+}
+
+interface FileTreeEntry {
+  name: string
+  path: string
+  type: 'file' | 'directory'
+  children?: FileTreeEntry[]
+}
+
+async function readFileTree(dirPath: string, relativeTo: string, maxDepth: number): Promise<FileTreeEntry[]> {
+  if (maxDepth <= 0) return []
+
+  try {
+    const entries = await readdir(dirPath, { withFileTypes: true })
+    const result: FileTreeEntry[] = []
+
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue
+
+      const fullPath = path.join(dirPath, entry.name)
+      const relPath = path.relative(relativeTo, fullPath)
+
+      if (entry.isDirectory()) {
+        const children = await readFileTree(fullPath, relativeTo, maxDepth - 1)
+        result.push({ name: entry.name, path: relPath, type: 'directory', children })
+      } else {
+        result.push({ name: entry.name, path: relPath, type: 'file' })
+      }
+    }
+
+    return result.sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
+      return a.name.localeCompare(b.name)
+    })
+  } catch {
+    return []
+  }
+}
 
 export async function projectRoutes(app: FastifyInstance) {
   // List projects for current user
@@ -63,13 +113,23 @@ export async function projectRoutes(app: FastifyInstance) {
       })
     }
 
+    const linkId = generateLinkId(parsed.data.name)
+    const username = request.user!.username
+
     const [project] = await db
       .insert(projects)
       .values({
         userId: request.user!.id,
+        linkId,
         ...parsed.data,
       })
       .returning()
+
+    // Create project directory (non-blocking)
+    const projectDir = `/home/auroracraft-${username}/${linkId}`
+    mkdir(projectDir, { recursive: true }).catch((err) => {
+      app.log.warn({ err, projectDir }, 'Failed to create project directory')
+    })
 
     return reply.status(201).send(project)
   })
@@ -121,5 +181,30 @@ export async function projectRoutes(app: FastifyInstance) {
     await db.delete(projects).where(eq(projects.id, id))
 
     return reply.status(204).send()
+  })
+
+  // Get file tree for a project
+  app.get('/api/projects/:id/files', { preHandler: [authMiddleware] }, async (request, reply) => {
+    const { id } = request.params as { id: string }
+
+    const [project] = await db
+      .select()
+      .from(projects)
+      .where(and(eq(projects.id, id), eq(projects.userId, request.user!.id)))
+      .limit(1)
+
+    if (!project) {
+      return reply.status(404).send({ message: 'Project not found', statusCode: 404 })
+    }
+
+    if (!project.linkId) {
+      return { files: [] }
+    }
+
+    const username = request.user!.username
+    const projectDir = `/home/auroracraft-${username}/${project.linkId}`
+    const files = await readFileTree(projectDir, projectDir, 6)
+
+    return { files }
   })
 }
