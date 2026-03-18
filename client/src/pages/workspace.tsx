@@ -306,23 +306,22 @@ function StreamingTodoList({ items }: { items: StreamTodoItem[] }) {
 // ── Streaming message (live agent response) ──────────────────────────
 
 function StreamingMessage({ state }: { state: StreamingState }) {
-  const hasContent = state.thinkingBlocks.length > 0 || state.fileOps.length > 0 || state.text.length > 0 || state.todos.length > 0
+  const hasContent = state.items.length > 0 || state.todos.length > 0
 
-  const allParts = [
-    ...state.thinkingBlocks.map((block) => ({ kind: 'thinking' as const, block, order: block.order })),
-    ...state.fileOps.map((op) => ({ kind: 'file-op' as const, op, order: op.order })),
-  ].sort((a, b) => a.order - b.order)
-
-  const groups: Array<{ kind: 'thinking'; block: ThinkingBlock } | { kind: 'file-ops'; ops: FileOpBlock[] }> = []
-  for (const part of allParts) {
-    if (part.kind === 'thinking') {
-      groups.push({ kind: 'thinking', block: part.block })
-    } else {
-      const last = groups[groups.length - 1]
-      if (last && last.kind === 'file-ops') {
-        last.ops.push(part.op)
+  // Group consecutive file-ops together
+  const renderedItems: Array<{ kind: 'thinking' | 'text'; id: string; content?: string; done?: boolean } | { kind: 'file-group'; ops: Array<{ id: string; action: string; path: string; newPath?: string; status: string; tool: string }> }> = []
+  
+  for (const item of state.items) {
+    if (item.kind === 'thinking') {
+      renderedItems.push({ kind: 'thinking', id: item.id, content: item.thinkingContent, done: item.thinkingDone })
+    } else if (item.kind === 'text') {
+      renderedItems.push({ kind: 'text', id: item.id, content: item.textContent })
+    } else if (item.kind === 'file-op') {
+      const last = renderedItems[renderedItems.length - 1]
+      if (last && last.kind === 'file-group') {
+        last.ops.push({ id: item.id, action: item.fileAction!, path: item.filePath!, newPath: item.fileNewPath, status: item.fileStatus!, tool: item.fileTool! })
       } else {
-        groups.push({ kind: 'file-ops', ops: [part.op] })
+        renderedItems.push({ kind: 'file-group', ops: [{ id: item.id, action: item.fileAction!, path: item.filePath!, newPath: item.fileNewPath, status: item.fileStatus!, tool: item.fileTool! }] })
       }
     }
   }
@@ -335,17 +334,46 @@ function StreamingMessage({ state }: { state: StreamingState }) {
       <div className="min-w-0 flex-1 space-y-2">
         <p className="text-xs font-medium text-text-muted">AI Agent</p>
 
-        {groups.map((group, i) =>
-          group.kind === 'thinking'
-            ? <StreamingThinkingBadge key={group.block.id} block={group.block} />
-            : <div key={`ops-${i}`} className="flex flex-wrap gap-1.5">
-                {group.ops.map((op) => <StreamingFileOpBadge key={op.id} op={op} />)}
-              </div>
+        {renderedItems.length > 0 ? (
+          <>
+            {renderedItems.map((item, idx) => {
+              if (item.kind === 'text') {
+                return (
+                  <div key={item.id} className="min-h-[1.5rem]">
+                    <MarkdownContent content={item.content || ''} />
+                  </div>
+                )
+              }
+              if (item.kind === 'thinking') {
+                return (
+                  <StreamingThinkingBadge 
+                    key={item.id} 
+                    block={{ id: item.id, content: item.content || '', done: item.done || false, order: idx }} 
+                  />
+                )
+              }
+              if (item.kind === 'file-group') {
+                return (
+                  <div key={`ops-${idx}`} className="flex flex-wrap gap-1.5">
+                    {item.ops.map((op) => (
+                      <StreamingFileOpBadge 
+                        key={op.id} 
+                        op={{ id: op.id, action: op.action, path: op.path, newPath: op.newPath, status: op.status as 'running' | 'completed' | 'error', tool: op.tool, order: idx }} 
+                      />
+                    ))}
+                  </div>
+                )
+              }
+              return null
+            })}
+            {state.todos.length > 0 && <StreamingTodoList items={state.todos} />}
+          </>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+            <span className="text-xs text-text-dim">AI is thinking...</span>
+          </div>
         )}
-
-        {state.text && <MarkdownContent content={state.text} />}
-
-        <StreamingTodoList items={state.todos} />
 
         {!hasContent && (
           <div className="flex items-center gap-2">
@@ -367,6 +395,7 @@ function MessageContent({ message }: { message: AgentMessage }) {
   if (parts.length > 0) {
     const groups: Array<
       | { kind: 'thinking'; content: string; idx: number }
+      | { kind: 'text'; content: string; idx: number }
       | { kind: 'file-group'; items: Array<{ part: MessagePart; idx: number }> }
       | { kind: 'todo'; items: TodoItem[]; idx: number }
     > = []
@@ -375,6 +404,8 @@ function MessageContent({ message }: { message: AgentMessage }) {
       const part = parts[i]
       if (part.type === 'thinking') {
         groups.push({ kind: 'thinking', content: part.content, idx: i })
+      } else if (part.type === 'text') {
+        groups.push({ kind: 'text', content: part.content, idx: i })
       } else if (part.type === 'file' || part.type === 'tool') {
         const last = groups[groups.length - 1]
         if (last && last.kind === 'file-group') {
@@ -393,6 +424,11 @@ function MessageContent({ message }: { message: AgentMessage }) {
           if (group.kind === 'thinking') {
             return <ThinkingBadge key={`think-${group.idx}`} content={group.content} />
           }
+          if (group.kind === 'text') {
+            return message.role === 'agent'
+              ? <MarkdownContent key={`text-${group.idx}`} content={group.content} />
+              : <p key={`text-${group.idx}`} className="whitespace-pre-wrap text-sm text-text">{group.content}</p>
+          }
           if (group.kind === 'file-group') {
             return (
               <div key={`fg-${group.items[0].idx}`} className="flex flex-wrap gap-1.5">
@@ -406,12 +442,6 @@ function MessageContent({ message }: { message: AgentMessage }) {
           }
           return <TodoListBadge key={`todo-${group.idx}`} items={group.items} />
         })}
-
-        {message.content && (
-          message.role === 'agent'
-            ? <MarkdownContent content={message.content} />
-            : <p className="whitespace-pre-wrap text-sm text-text">{message.content}</p>
-        )}
       </div>
     )
   }
@@ -600,7 +630,7 @@ function ChatSession({ projectId, sessionId, pendingMessage, onPendingMessageSen
   onModelChange: (modelId: string) => void
   onRefreshFiles?: () => void
 }) {
-  const { session, messages, isLoading, sendMessage, isSending, sendError } = useAgentSession(projectId, sessionId)
+  const { session, messages, isLoading, sendMessage, isSending, sendError, invalidateAndRefetch } = useAgentSession(projectId, sessionId)
   const streamActive = !!projectId && !!sessionId && (!session || session.status === 'idle' || session.status === 'running')
   const { streamingState, isConnected, resetStream } = useStreamingAgent(projectId, sessionId, streamActive)
   const [input, setInput] = useState('')
@@ -615,6 +645,8 @@ function ChatSession({ projectId, sessionId, pendingMessage, onPendingMessageSen
       pendingSentRef.current = true
       setAwaitingStream(true)
       resetStream()
+      streamStartMessageCountRef.current = messages.length
+      completionHandledRef.current = false
       void sendMessage({ content: pendingMessage, model: selectedModel }).catch(() => setAwaitingStream(false))
       onPendingMessageSent?.()
     }
@@ -628,6 +660,8 @@ function ChatSession({ projectId, sessionId, pendingMessage, onPendingMessageSen
         pendingSentRef.current = true
         setAwaitingStream(true)
         resetStream()
+        streamStartMessageCountRef.current = messages.length
+        completionHandledRef.current = false
         void sendMessage({ content: pendingMessage, model: selectedModel }).catch(() => setAwaitingStream(false))
         onPendingMessageSent?.()
       }
@@ -636,24 +670,18 @@ function ChatSession({ projectId, sessionId, pendingMessage, onPendingMessageSen
   }, [pendingMessage, sendMessage, onPendingMessageSent, selectedModel, resetStream])
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, streamingState.text.length, streamingState.thinkingBlocks.length, streamingState.fileOps.length, streamingState.todos.length])
+    // Only auto-scroll for new messages, not during streaming
+    if (!streamingState.isStreaming) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [messages, streamingState.isStreaming])
 
   // Clear awaitingStream once real streaming content arrives
   useEffect(() => {
-    if (awaitingStream && (streamingState.isStreaming || streamingState.text.length > 0 || streamingState.thinkingBlocks.length > 0)) {
+    if (awaitingStream && (streamingState.isStreaming || streamingState.items.length > 0)) {
       setAwaitingStream(false)
     }
-  }, [awaitingStream, streamingState.isStreaming, streamingState.text.length, streamingState.thinkingBlocks.length])
-
-  useEffect(() => {
-    if (session && session.status !== 'running' && session.status !== 'idle') {
-      resetStream()
-      setAwaitingStream(false)
-      prevFileChangesRef.current = 0
-      prevCompletedOpsRef.current = 0
-    }
-  }, [session?.status, resetStream])
+  }, [awaitingStream, streamingState.isStreaming, streamingState.items.length])
 
   useEffect(() => {
     if (streamingState.fileChanges.length > prevFileChangesRef.current) {
@@ -663,12 +691,34 @@ function ChatSession({ projectId, sessionId, pendingMessage, onPendingMessageSen
   }, [streamingState.fileChanges.length, onRefreshFiles])
 
   useEffect(() => {
-    const completed = streamingState.fileOps.filter((op) => op.status === 'completed').length
+    const completed = streamingState.items.filter((item) => item.kind === 'file-op' && item.fileStatus === 'completed').length
     if (completed > prevCompletedOpsRef.current) {
       prevCompletedOpsRef.current = completed
       onRefreshFiles?.()
     }
-  }, [streamingState.fileOps, onRefreshFiles])
+  }, [streamingState.items, onRefreshFiles])
+
+  // Track message count at stream start to detect when persisted agent message replaces streaming.
+  // This avoids effect-based timing gaps where streaming hides before persisted content loads.
+  const streamStartMessageCountRef = useRef(0)
+  const completionHandledRef = useRef(false)
+  const messagesLenRef = useRef(messages.length)
+  messagesLenRef.current = messages.length
+
+  // Initialize from loaded messages (handles page reload with existing session)
+  useEffect(() => {
+    if (messages.length > 0 && streamStartMessageCountRef.current === 0) {
+      streamStartMessageCountRef.current = messages.length
+    }
+  }, [messages.length])
+
+  // Refetch final messages when session completes
+  useEffect(() => {
+    if ((session?.status === 'completed' || session?.status === 'failed') && !completionHandledRef.current) {
+      completionHandledRef.current = true
+      invalidateAndRefetch()
+    }
+  }, [session?.status, invalidateAndRefetch])
 
   const handleSend = useCallback(async () => {
     const trimmed = input.trim()
@@ -676,6 +726,8 @@ function ChatSession({ projectId, sessionId, pendingMessage, onPendingMessageSen
     setInput('')
     setAwaitingStream(true)
     resetStream()
+    streamStartMessageCountRef.current = messagesLenRef.current
+    completionHandledRef.current = false
     prevFileChangesRef.current = 0
     prevCompletedOpsRef.current = 0
     try {
@@ -693,7 +745,10 @@ function ChatSession({ projectId, sessionId, pendingMessage, onPendingMessageSen
     )
   }
 
-  const showStreaming = awaitingStream || session?.status === 'running'
+  const streamHasContent = streamingState.items.length > 0 || streamingState.todos.length > 0
+  const newAgentMessageReceived = messages.length > streamStartMessageCountRef.current &&
+    messages.slice(streamStartMessageCountRef.current).some(m => m.role === 'agent')
+  const showStreaming = awaitingStream || session?.status === 'running' || (streamHasContent && !newAgentMessageReceived)
 
   const statusColor =
     session?.status === 'running' ? 'text-warning' :

@@ -8,9 +8,8 @@ import type {
   AgentLog,
   StreamEvent,
   StreamingState,
+  StreamingItem,
   FileTreeEntry,
-  ThinkingBlock,
-  FileOpBlock,
   StreamTodoItem,
 } from '@/types'
 
@@ -52,7 +51,7 @@ export function useAgentSessions(projectId: string) {
 export function useAgentSession(projectId: string, sessionId: string) {
   const queryClient = useQueryClient()
 
-  const { data: session, isLoading } = useQuery({
+  const { data: session, isLoading, refetch } = useQuery({
     queryKey: ['projects', projectId, 'agent', 'sessions', sessionId],
     queryFn: () => api.get<AgentSessionWithMessages>(`/projects/${projectId}/agent/sessions/${sessionId}`),
     enabled: !!projectId && !!sessionId,
@@ -64,6 +63,11 @@ export function useAgentSession(projectId: string, sessionId: string) {
       return false
     },
   })
+
+  const invalidateAndRefetch = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'agent', 'sessions', sessionId] })
+    void refetch()
+  }, [queryClient, projectId, sessionId, refetch])
 
   const sendMessageMutation = useMutation({
     mutationFn: ({ content, model }: { content: string; model?: string }) =>
@@ -80,6 +84,7 @@ export function useAgentSession(projectId: string, sessionId: string) {
     sendMessage: sendMessageMutation.mutateAsync,
     isSending: sendMessageMutation.isPending,
     sendError: sendMessageMutation.error,
+    invalidateAndRefetch,
   }
 }
 
@@ -100,9 +105,8 @@ export function useAgentLogs(projectId: string, sessionId: string) {
 // ── Mutable accumulator for streaming events (not React state) ───────
 
 interface StreamAccumulator {
-  text: string
-  thinkingBlocks: Map<string, ThinkingBlock>
-  fileOps: Map<string, FileOpBlock>
+  items: StreamingItem[]
+  itemById: Map<string, StreamingItem>
   todos: StreamTodoItem[]
   isStreaming: boolean
   completed: boolean
@@ -112,9 +116,8 @@ interface StreamAccumulator {
 
 function createEmptyAccumulator(): StreamAccumulator {
   return {
-    text: '',
-    thinkingBlocks: new Map(),
-    fileOps: new Map(),
+    items: [],
+    itemById: new Map(),
     todos: [],
     isStreaming: false,
     completed: false,
@@ -125,9 +128,7 @@ function createEmptyAccumulator(): StreamAccumulator {
 
 function snapshotAccumulator(acc: StreamAccumulator): StreamingState {
   return {
-    text: acc.text,
-    thinkingBlocks: Array.from(acc.thinkingBlocks.values()),
-    fileOps: Array.from(acc.fileOps.values()),
+    items: acc.items.filter(item => item.kind !== 'text' || item.textContent),
     todos: acc.todos,
     isStreaming: acc.isStreaming,
     fileChanges: [...acc.fileChanges],
@@ -135,9 +136,7 @@ function snapshotAccumulator(acc: StreamAccumulator): StreamingState {
 }
 
 const EMPTY_STREAMING_STATE: StreamingState = {
-  text: '',
-  thinkingBlocks: [],
-  fileOps: [],
+  items: [],
   todos: [],
   isStreaming: false,
   fileChanges: [],
@@ -145,37 +144,66 @@ const EMPTY_STREAMING_STATE: StreamingState = {
 
 function processStreamEvent(acc: StreamAccumulator, event: StreamEvent): void {
   switch (event.type) {
-    case 'text-delta':
-      acc.text += event.content
+    case 'text-delta': {
+      // Find or create a text item for current position
+      const lastItem = acc.items[acc.items.length - 1]
+      if (lastItem && lastItem.kind === 'text') {
+        lastItem.textContent = (lastItem.textContent || '') + event.content
+      } else {
+        // Create new text item at current position
+        const textItem: StreamingItem = {
+          id: `text-${acc.nextOrder++}`,
+          kind: 'text',
+          order: acc.nextOrder,
+          textContent: event.content,
+        }
+        acc.items.push(textItem)
+        acc.itemById.set(textItem.id, textItem)
+      }
       break
+    }
 
     case 'thinking': {
-      const existing = acc.thinkingBlocks.get(event.id)
-      if (existing) {
-        existing.content += event.content
-        existing.done = event.done
+      const existing = acc.itemById.get(event.id)
+      if (existing && existing.kind === 'thinking') {
+        existing.thinkingContent = (existing.thinkingContent || '') + event.content
+        existing.thinkingDone = event.done
       } else {
-        acc.thinkingBlocks.set(event.id, {
+        const item: StreamingItem = {
           id: event.id,
-          content: event.content,
-          done: event.done,
+          kind: 'thinking',
           order: acc.nextOrder++,
-        })
+          thinkingContent: event.content,
+          thinkingDone: event.done,
+        }
+        acc.items.push(item)
+        acc.itemById.set(item.id, item)
       }
       break
     }
 
     case 'file-op': {
-      const existingOp = acc.fileOps.get(event.id)
-      acc.fileOps.set(event.id, {
-        id: event.id,
-        action: event.action,
-        path: event.path,
-        newPath: event.newPath,
-        status: event.status,
-        tool: event.tool,
-        order: existingOp?.order ?? acc.nextOrder++,
-      })
+      const existing = acc.itemById.get(event.id)
+      if (existing && existing.kind === 'file-op') {
+        existing.fileAction = event.action
+        existing.filePath = event.path
+        existing.fileNewPath = event.newPath
+        existing.fileStatus = event.status
+        existing.fileTool = event.tool
+      } else {
+        const item: StreamingItem = {
+          id: event.id,
+          kind: 'file-op',
+          order: acc.nextOrder++,
+          fileAction: event.action,
+          filePath: event.path,
+          fileNewPath: event.newPath,
+          fileStatus: event.status,
+          fileTool: event.tool,
+        }
+        acc.items.push(item)
+        acc.itemById.set(item.id, item)
+      }
       break
     }
 

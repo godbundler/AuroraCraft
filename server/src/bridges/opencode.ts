@@ -696,12 +696,16 @@ export class OpenCodeBridge implements BridgeInterface {
       const thinkingParts = new Map<string, { content: string; done: boolean }>()
       const filePartsById = new Map<string, { action: string; path: string; newPath?: string; tool: string }>()
       const seenParts = new Set<string>()
-      const orderedRefs: Array<{ type: 'thinking' | 'file' | 'tool'; id: string }> = []
+      const orderedRefs: Array<{ type: 'thinking' | 'file' | 'tool' | 'text'; id: string }> = []
       let latestTodos: TodoItem[] = []
       let resolved = false
 
       let timedOut = false
       let lastEventTime = Date.now()
+
+      // Track intermediate text segments for proper ordering
+      const textSegments: Array<{ id: string; text: string }> = []
+      let pendingText = ''
 
       const completionPromise = new Promise<void>((resolve) => {
         const timeout = setTimeout(() => {
@@ -715,11 +719,20 @@ export class OpenCodeBridge implements BridgeInterface {
 
           switch (event.type) {
             case 'text-delta':
+              pendingText += event.content
               collectedText.push(event.content)
-              onEvent({ type: 'output', content: event.content, timestamp: new Date().toISOString() })
+              onEvent({ type: 'text-delta', content: event.content, timestamp: new Date().toISOString() })
               break
 
             case 'thinking': {
+              // Capture any pending text as a segment before adding thinking
+              if (pendingText.trim()) {
+                const textId = `text-${textSegments.length}`
+                textSegments.push({ id: textId, text: pendingText.trim() })
+                orderedRefs.push({ type: 'text', id: textId })
+              }
+              pendingText = ''
+
               const existing = thinkingParts.get(event.id) ?? { content: '', done: false }
               existing.content += event.content
               existing.done = event.done
@@ -733,6 +746,14 @@ export class OpenCodeBridge implements BridgeInterface {
             }
 
             case 'file-op': {
+              // Capture any pending text as a segment before adding file-op
+              if (pendingText.trim()) {
+                const textId = `text-${textSegments.length}`
+                textSegments.push({ id: textId, text: pendingText.trim() })
+                orderedRefs.push({ type: 'text', id: textId })
+              }
+              pendingText = ''
+
               if (!seenParts.has(event.id)) {
                 seenParts.add(event.id)
                 orderedRefs.push({ type: event.action === 'tool' ? 'tool' : 'file', id: event.id })
@@ -857,12 +878,23 @@ export class OpenCodeBridge implements BridgeInterface {
         onEvent({ type: 'complete', content: 'Timed out', timestamp: new Date().toISOString() })
         const partialText = await this.fetchAssistantText(opencodeSessionId)
 
+        // Flush any remaining pending text into segments
+        if (pendingText.trim()) {
+          const textId = `text-${textSegments.length}`
+          textSegments.push({ id: textId, text: pendingText.trim() })
+          orderedRefs.push({ type: 'text', id: textId })
+          pendingText = ''
+        }
+
         // Assemble partial metadata so file-op badges are preserved
         const timeoutParts: MessagePart[] = []
         for (const ref of orderedRefs) {
           if (ref.type === 'thinking') {
             const t = thinkingParts.get(ref.id)
             if (t) timeoutParts.push({ type: 'thinking', content: t.content })
+          } else if (ref.type === 'text') {
+            const seg = textSegments.find((s) => s.id === ref.id)
+            if (seg) timeoutParts.push({ type: 'text', content: seg.text })
           } else {
             const fp = filePartsById.get(ref.id)
             if (fp) {
@@ -913,12 +945,23 @@ export class OpenCodeBridge implements BridgeInterface {
 
       onEvent({ type: 'complete', content: 'Done', timestamp: new Date().toISOString() })
 
+      // Flush any remaining pending text into segments so the last text block is included in parts
+      if (pendingText.trim()) {
+        const textId = `text-${textSegments.length}`
+        textSegments.push({ id: textId, text: pendingText.trim() })
+        orderedRefs.push({ type: 'text', id: textId })
+        pendingText = ''
+      }
+
       // Assemble metadata parts
       const parts: MessagePart[] = []
       for (const ref of orderedRefs) {
         if (ref.type === 'thinking') {
           const t = thinkingParts.get(ref.id)
           if (t) parts.push({ type: 'thinking', content: t.content })
+        } else if (ref.type === 'text') {
+          const seg = textSegments.find((s) => s.id === ref.id)
+          if (seg) parts.push({ type: 'text', content: seg.text })
         } else {
           const fp = filePartsById.get(ref.id)
           if (fp) {

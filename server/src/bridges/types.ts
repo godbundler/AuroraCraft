@@ -16,7 +16,7 @@ export interface BridgeTask {
 }
 
 export interface BridgeStreamEvent {
-  type: 'output' | 'error' | 'status' | 'complete' | 'thinking' | 'file-op' | 'todo'
+  type: 'output' | 'text-delta' | 'error' | 'status' | 'complete' | 'thinking' | 'file-op' | 'todo'
   content: string
   timestamp: string
   metadata?: Record<string, unknown>
@@ -24,6 +24,7 @@ export interface BridgeStreamEvent {
 
 export type MessagePart =
   | { type: 'thinking'; content: string }
+  | { type: 'text'; content: string }
   | { type: 'file'; action: 'create' | 'update' | 'delete' | 'rename' | 'read'; path: string; newPath?: string }
   | { type: 'tool'; tool: string; path: string }
   | { type: 'todo-list'; items: TodoItem[] }

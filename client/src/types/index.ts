@@ -71,6 +71,7 @@ export interface MessageMetadata {
 
 export type MessagePart =
   | { type: 'thinking'; content: string }
+  | { type: 'text'; content: string }
   | { type: 'file'; action: 'create' | 'update' | 'delete' | 'rename' | 'read'; path: string; newPath?: string }
   | { type: 'tool'; tool: string; path: string }
   | { type: 'todo-list'; items: TodoItem[] }
@@ -168,10 +169,25 @@ export interface FileOpBlock {
   order: number
 }
 
+export interface StreamingItem {
+  id: string
+  kind: 'thinking' | 'file-op' | 'text'
+  order: number
+  // For thinking
+  thinkingContent?: string
+  thinkingDone?: boolean
+  // For file-op
+  fileAction?: string
+  filePath?: string
+  fileNewPath?: string
+  fileStatus?: 'running' | 'completed' | 'error'
+  fileTool?: string
+  // For text
+  textContent?: string
+}
+
 export interface StreamingState {
-  text: string
-  thinkingBlocks: ThinkingBlock[]
-  fileOps: FileOpBlock[]
+  items: StreamingItem[]
   todos: StreamTodoItem[]
   isStreaming: boolean
   fileChanges: string[]
