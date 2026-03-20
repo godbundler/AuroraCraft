@@ -17,17 +17,21 @@ import {
   Trash2,
   Blocks,
   ExternalLink,
+  Square,
+  CheckSquare,
 } from 'lucide-react'
+import { useIsMobile } from '@/hooks/use-mobile'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { useProject, useProjectStats } from '@/hooks/use-projects'
 import type { UpdateProjectInput } from '@/types'
 
-type TabId = 'overview' | 'stats' | 'settings'
+type TabId = 'overview' | 'stats' | 'compiler' | 'settings'
 
 const tabs: { id: TabId; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'stats', label: 'Stats', icon: BarChart3 },
+  { id: 'compiler', label: 'Compiler', icon: Blocks },
   { id: 'settings', label: 'Settings', icon: Settings },
 ]
 
@@ -44,15 +48,15 @@ const javaVersions = ['21', '17', '11', '8']
 interface OverviewForm {
   name: string
   description: string
+  logo: string
+  versions: string
   software: string
-  language: 'java' | 'kotlin'
-  javaVersion: string
-  compiler: 'maven' | 'gradle'
 }
 
 export default function ProjectMenuPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
+  const isMobile = useIsMobile()
   const { project, isLoading, updateProject, isUpdating, deleteProject, isDeleting } = useProject(projectId ?? '')
   const [activeTab, setActiveTab] = useState<TabId>('overview')
 
@@ -81,11 +85,11 @@ export default function ProjectMenuPage() {
       <header className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-surface px-4">
         <div className="flex items-center gap-3">
           <Link
-            to={`/workspace/${projectId}`}
+            to="/dashboard"
             className="flex items-center gap-2 text-sm text-text-muted transition-colors hover:text-text"
           >
             <ArrowLeft className="h-4 w-4" />
-            Back to Workspace
+            Back to Dashboard
           </Link>
           <div className="h-5 w-px bg-border" />
           <div className="flex items-center gap-2">
@@ -104,33 +108,56 @@ export default function ProjectMenuPage() {
 
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar */}
-        <aside className="w-56 shrink-0 border-r border-border bg-surface">
-          <nav className="flex flex-col gap-1 p-3">
-            <p className="mb-2 px-3 text-xs font-medium uppercase tracking-wider text-text-dim">
-              Project Menu
-            </p>
-            {tabs.map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={cn(
-                  'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',
-                  activeTab === tab.id
-                    ? 'bg-primary/10 text-primary'
-                    : 'text-text-muted hover:bg-surface-hover hover:text-text'
-                )}
-              >
-                <tab.icon className="h-4 w-4" />
-                {tab.label}
-              </button>
-            ))}
-          </nav>
-        </aside>
+        {/* Sidebar (desktop) */}
+        {!isMobile && (
+          <aside className="w-56 shrink-0 border-r border-border bg-surface">
+            <nav className="flex flex-col gap-1 p-3">
+              <p className="mb-2 px-3 text-xs font-medium uppercase tracking-wider text-text-dim">
+                Project Menu
+              </p>
+              {tabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={cn(
+                    'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',
+                    activeTab === tab.id
+                      ? 'bg-primary/10 text-primary'
+                      : 'text-text-muted hover:bg-surface-hover hover:text-text'
+                  )}
+                >
+                  <tab.icon className="h-4 w-4" />
+                  {tab.label}
+                </button>
+              ))}
+            </nav>
+          </aside>
+        )}
 
         {/* Content */}
-        <main className="flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-3xl px-6 py-8">
+        <main className="flex flex-1 flex-col overflow-hidden">
+          {/* Horizontal tab bar (mobile) */}
+          {isMobile && (
+            <div className="flex shrink-0 overflow-x-auto border-b border-border bg-surface px-2">
+              {tabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={cn(
+                    'flex shrink-0 items-center gap-2 px-4 py-3 text-xs font-medium transition-colors',
+                    activeTab === tab.id
+                      ? 'border-b-2 border-primary text-primary'
+                      : 'text-text-muted hover:text-text'
+                  )}
+                >
+                  <tab.icon className="h-3.5 w-3.5" />
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="flex-1 overflow-y-auto">
+          <div className={cn('mx-auto max-w-3xl', isMobile ? 'px-4 py-6' : 'px-6 py-8')}>
             {activeTab === 'overview' && (
               <OverviewTab
                 project={project}
@@ -140,6 +167,13 @@ export default function ProjectMenuPage() {
             )}
             {activeTab === 'stats' && (
               <StatsTab projectId={projectId ?? ''} />
+            )}
+            {activeTab === 'compiler' && (
+              <CompilerTab
+                project={project}
+                updateProject={updateProject}
+                isUpdating={isUpdating}
+              />
             )}
             {activeTab === 'settings' && (
               <SettingsTab
@@ -151,6 +185,7 @@ export default function ProjectMenuPage() {
                 onDeleted={() => navigate('/dashboard')}
               />
             )}
+          </div>
           </div>
         </main>
       </div>
@@ -172,11 +207,11 @@ function OverviewTab({
   const [form, setForm] = useState<OverviewForm>({
     name: project.name,
     description: project.description ?? '',
+    logo: project.logo ?? '',
+    versions: project.versions ?? '',
     software: project.software,
-    language: project.language,
-    javaVersion: project.javaVersion,
-    compiler: project.compiler,
   })
+  const [logoPreview, setLogoPreview] = useState<string | null>(project.logo)
 
   const [errors, setErrors] = useState<Partial<Record<keyof OverviewForm, string>>>({})
 
@@ -184,12 +219,43 @@ function OverviewTab({
     setForm({
       name: project.name,
       description: project.description ?? '',
+      logo: project.logo ?? '',
+      versions: project.versions ?? '',
       software: project.software,
-      language: project.language,
-      javaVersion: project.javaVersion,
-      compiler: project.compiler,
     })
+    setLogoPreview(project.logo)
   }, [project])
+
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    
+    if (!file.type.startsWith('image/')) {
+      toast.error('Please select a valid image file')
+      return
+    }
+    
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error('Image size must be less than 2MB')
+      return
+    }
+    
+    const reader = new FileReader()
+    reader.onload = (event) => {
+      const base64 = event.target?.result as string
+      setForm(prev => ({ ...prev, logo: base64 }))
+      setLogoPreview(base64)
+    }
+    reader.onerror = () => {
+      toast.error('Failed to read image file')
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const removeLogo = () => {
+    setForm({ ...form, logo: '' })
+    setLogoPreview(null)
+  }
 
   const isFormValid = form.name.trim().length >= 2 && form.name.trim().length <= 128 && form.description.length <= 1000
 
@@ -205,10 +271,9 @@ function OverviewTab({
   const hasChanges =
     form.name !== project.name ||
     form.description !== (project.description ?? '') ||
-    form.software !== project.software ||
-    form.language !== project.language ||
-    form.javaVersion !== project.javaVersion ||
-    form.compiler !== project.compiler
+    form.logo !== (project.logo ?? '') ||
+    form.versions !== (project.versions ?? '') ||
+    form.software !== project.software
 
   const handleSave = async () => {
     if (!validate()) return
@@ -216,10 +281,9 @@ function OverviewTab({
       await updateProject({
         name: form.name.trim(),
         description: form.description.trim() || null,
+        logo: form.logo || null,
+        versions: form.versions.trim() || null,
         software: form.software,
-        language: form.language,
-        javaVersion: form.javaVersion,
-        compiler: form.compiler,
       })
       toast.success('Project updated successfully')
     } catch {
@@ -293,6 +357,54 @@ function OverviewTab({
           </div>
         </div>
 
+        {/* Logo */}
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-text">Project Logo</label>
+          {logoPreview ? (
+            <div className="flex items-center gap-4">
+              <img src={logoPreview} alt="Logo" className="h-20 w-20 rounded-lg border border-border object-cover" />
+              <button
+                onClick={removeLogo}
+                className="text-sm text-destructive hover:text-destructive/80"
+              >
+                Remove Logo
+              </button>
+            </div>
+          ) : (
+            <div className="relative">
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleLogoUpload}
+                className="hidden"
+                id="logo-upload-overview"
+              />
+              <label
+                htmlFor="logo-upload-overview"
+                className="flex cursor-pointer items-center justify-center rounded-lg border-2 border-dashed border-border bg-surface px-4 py-8 text-sm text-text-muted transition-colors hover:border-primary hover:bg-surface-hover"
+              >
+                <div className="text-center">
+                  <p>Click to upload logo</p>
+                  <p className="mt-1 text-xs text-text-dim">PNG, JPG, GIF up to 2MB</p>
+                </div>
+              </label>
+            </div>
+          )}
+        </div>
+
+        {/* Versions */}
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-text">Supported Versions</label>
+          <input
+            type="text"
+            value={form.versions}
+            onChange={(e) => updateField('versions', e.target.value)}
+            placeholder="e.g., 1.20.1, 1.19.4, 1.18.2"
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text placeholder:text-text-dim focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+          <p className="mt-1 text-xs text-text-dim">Comma-separated list of Minecraft versions</p>
+        </div>
+
         {/* Project Type (read-only) */}
         <div>
           <label className="mb-1.5 block text-sm font-medium text-text">Project Type</label>
@@ -302,77 +414,18 @@ function OverviewTab({
           </div>
         </div>
 
-        {/* Two-column grid */}
-        <div className="grid gap-6 sm:grid-cols-2">
-          {/* Software */}
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-text">Server Software</label>
-            <select
-              value={form.software}
-              onChange={(e) => updateField('software', e.target.value)}
-              className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-            >
-              {softwareOptions.map((sw) => (
-                <option key={sw.value} value={sw.value}>{sw.label}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Language */}
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-text">Language</label>
-            <div className="flex gap-2">
-              {(['java', 'kotlin'] as const).map((lang) => (
-                <button
-                  key={lang}
-                  onClick={() => updateField('language', lang)}
-                  className={cn(
-                    'flex-1 rounded-lg border px-4 py-2 text-sm font-medium transition-colors',
-                    form.language === lang
-                      ? 'border-primary bg-primary/10 text-primary'
-                      : 'border-border text-text-muted hover:border-border-bright hover:bg-surface-hover'
-                  )}
-                >
-                  {lang.charAt(0).toUpperCase() + lang.slice(1)}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Java Version */}
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-text">Java Version</label>
-            <select
-              value={form.javaVersion}
-              onChange={(e) => updateField('javaVersion', e.target.value)}
-              className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-            >
-              {javaVersions.map((v) => (
-                <option key={v} value={v}>Java {v}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Compiler */}
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-text">Build Tool</label>
-            <div className="flex gap-2">
-              {(['gradle', 'maven'] as const).map((c) => (
-                <button
-                  key={c}
-                  onClick={() => updateField('compiler', c)}
-                  className={cn(
-                    'flex-1 rounded-lg border px-4 py-2 text-sm font-medium transition-colors',
-                    form.compiler === c
-                      ? 'border-primary bg-primary/10 text-primary'
-                      : 'border-border text-text-muted hover:border-border-bright hover:bg-surface-hover'
-                  )}
-                >
-                  {c.charAt(0).toUpperCase() + c.slice(1)}
-                </button>
-              ))}
-            </div>
-          </div>
+        {/* Software */}
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-text">Server Software</label>
+          <select
+            value={form.software}
+            onChange={(e) => updateField('software', e.target.value)}
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+          >
+            {softwareOptions.map((sw) => (
+              <option key={sw.value} value={sw.value}>{sw.label}</option>
+            ))}
+          </select>
         </div>
       </div>
     </div>
@@ -404,7 +457,7 @@ function StatsTab({ projectId }: { projectId: string }) {
   const statCards = [
     { label: 'User Messages', value: stats?.userMessages ?? 0, icon: MessageSquare, color: 'text-primary' },
     { label: 'AI Messages', value: stats?.aiMessages ?? 0, icon: Bot, color: 'text-emerald-400' },
-    { label: 'File Actions', value: stats?.fileActions ?? 0, icon: FileCode, color: 'text-amber-400' },
+    { label: 'Files', value: stats?.files ?? 0, icon: FileCode, color: 'text-amber-400' },
     { label: 'Tokens Used', value: stats?.tokensUsed ?? 0, icon: Zap, color: 'text-violet-400', placeholder: true },
     {
       label: 'Created',
@@ -444,6 +497,160 @@ function StatsTab({ projectId }: { projectId: string }) {
             )}
           </div>
         ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Compiler Tab ────────────────────────────────────────────────────
+
+function parseCompilers(compiler: string): string[] {
+  if (compiler === 'both') return ['gradle', 'maven']
+  return [compiler]
+}
+
+function compilersToValue(arr: string[]): 'gradle' | 'maven' | 'both' {
+  if (arr.length === 2) return 'both'
+  return arr[0] as 'gradle' | 'maven'
+}
+
+function CompilerTab({
+  project,
+  updateProject,
+  isUpdating,
+}: {
+  project: NonNullable<ReturnType<typeof useProject>['project']>
+  updateProject: (data: UpdateProjectInput) => Promise<unknown>
+  isUpdating: boolean
+}) {
+  const [form, setForm] = useState({
+    language: project.language,
+    javaVersion: project.javaVersion,
+    compilers: parseCompilers(project.compiler),
+  })
+
+  useEffect(() => {
+    setForm({
+      language: project.language,
+      javaVersion: project.javaVersion,
+      compilers: parseCompilers(project.compiler),
+    })
+  }, [project])
+
+  const hasChanges =
+    form.language !== project.language ||
+    form.javaVersion !== project.javaVersion ||
+    compilersToValue(form.compilers) !== project.compiler
+
+  const handleSave = async () => {
+    try {
+      await updateProject({
+        language: form.language,
+        javaVersion: form.javaVersion,
+        compiler: compilersToValue(form.compilers),
+      })
+      toast.success('Compiler settings updated')
+    } catch {
+      toast.error('Failed to update compiler settings')
+    }
+  }
+
+  const toggleCompiler = (value: string) => {
+    const next = form.compilers.includes(value)
+      ? form.compilers.filter(v => v !== value)
+      : [...form.compilers, value]
+    if (next.length > 0) setForm({ ...form, compilers: next })
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold tracking-tight text-text">Compiler</h1>
+          <p className="mt-1 text-sm text-text-muted">Configure language and build settings</p>
+        </div>
+        <button
+          onClick={handleSave}
+          disabled={!hasChanges || isUpdating}
+          className={cn(
+            'inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors',
+            hasChanges
+              ? 'bg-primary text-primary-foreground hover:bg-primary-hover'
+              : 'bg-surface text-text-dim cursor-not-allowed'
+          )}
+        >
+          <Save className="h-4 w-4" />
+          {isUpdating ? 'Saving...' : 'Save Changes'}
+        </button>
+      </div>
+
+      <div className="mt-8 space-y-6">
+        {/* Language */}
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-text">Language</label>
+          <div className="flex gap-2">
+            {(['java', 'kotlin'] as const).map((lang) => (
+              <button
+                key={lang}
+                onClick={() => setForm({ ...form, language: lang })}
+                className={cn(
+                  'flex-1 rounded-lg border px-4 py-2 text-sm font-medium transition-colors',
+                  form.language === lang
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'border-border text-text-muted hover:border-border-bright hover:bg-surface-hover'
+                )}
+              >
+                {lang.charAt(0).toUpperCase() + lang.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Java Version */}
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-text">Java Version</label>
+          <select
+            value={form.javaVersion}
+            onChange={(e) => setForm({ ...form, javaVersion: e.target.value })}
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+          >
+            {javaVersions.map((v) => (
+              <option key={v} value={v}>Java {v}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Build Tool(s) */}
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-text">Build Tool(s)</label>
+          <p className="mb-2 text-xs text-text-muted">Select one or both build tools</p>
+          <div className="space-y-2">
+            {(['gradle', 'maven'] as const).map((c) => {
+              const isSelected = form.compilers.includes(c)
+              return (
+                <button
+                  key={c}
+                  onClick={() => toggleCompiler(c)}
+                  className={cn(
+                    'flex w-full items-center gap-3 rounded-lg border px-4 py-3 text-left transition-colors',
+                    isSelected
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:border-border-bright hover:bg-surface-hover'
+                  )}
+                >
+                  {isSelected ? (
+                    <CheckSquare className="h-4 w-4 shrink-0 text-primary" />
+                  ) : (
+                    <Square className="h-4 w-4 shrink-0 text-border" />
+                  )}
+                  <span className="text-sm font-medium text-text">
+                    {c.charAt(0).toUpperCase() + c.slice(1)}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
       </div>
     </div>
   )

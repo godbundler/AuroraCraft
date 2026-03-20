@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { Link, useParams, useNavigate } from 'react-router'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -78,7 +78,7 @@ function ReadOnlyFileTreeNode({ entry, depth = 0, onFileSelect, selectedFile }: 
   onFileSelect: (path: string) => void
   selectedFile: string | null
 }) {
-  const [expanded, setExpanded] = useState(depth < 2)
+  const [expanded, setExpanded] = useState(false)
   const pl = depth * 12 + 8
 
   if (entry.type === 'directory') {
@@ -375,7 +375,16 @@ export default function CommunityProjectPage() {
   const { files, isLoading: filesLoading } = useCommunityProjectFiles(projectId ?? '')
   const { forkProject, isForking } = useForkProject()
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
-  const [mobileTab, setMobileTab] = useState<'files' | 'code' | 'chat'>('files')
+  const isChatFirst = project?.layoutMode === 'chat-first'
+  const [mobileTab, setMobileTab] = useState<'files' | 'code' | 'chat'>('chat')
+  const initialTabSetRef = useRef(false)
+
+  useEffect(() => {
+    if (project && !initialTabSetRef.current) {
+      initialTabSetRef.current = true
+      setMobileTab(project.layoutMode === 'code-first' ? 'code' : 'chat')
+    }
+  }, [project])
 
   const handleFileSelect = useCallback((filePath: string) => {
     setSelectedFile(filePath)
@@ -423,6 +432,10 @@ export default function CommunityProjectPage() {
   }
 
   if (isMobile) {
+    const mobileTabs = isChatFirst
+      ? [{ id: 'chat' as const, icon: MessageCircle, label: 'Chat' }, { id: 'files' as const, icon: FolderTree, label: 'Files' }, { id: 'code' as const, icon: Code2, label: 'Code' }]
+      : [{ id: 'code' as const, icon: Code2, label: 'Code' }, { id: 'files' as const, icon: FolderTree, label: 'Files' }, { id: 'chat' as const, icon: MessageCircle, label: 'Chat' }]
+
     return (
       <div className="flex h-[100dvh] flex-col bg-background">
         {/* Header */}
@@ -435,6 +448,14 @@ export default function CommunityProjectPage() {
               <span className="truncate text-sm font-medium text-text">{project.name}</span>
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              <a
+                href={`/api/community/projects/${projectId}/download/zip`}
+                download
+                className="rounded-md border border-border p-1.5 text-text-dim transition-colors hover:text-text-muted"
+                title="Download project"
+              >
+                <Download className="h-3.5 w-3.5" />
+              </a>
               <button
                 onClick={handleFork}
                 disabled={isForking}
@@ -455,22 +476,22 @@ export default function CommunityProjectPage() {
 
         {/* Body */}
         <div className="flex-1 overflow-hidden">
+          <div className={cn('h-full', mobileTab !== 'chat' && 'hidden')}>
+            <ChatHistoryPanel projectId={projectId ?? ''} />
+          </div>
           <div className={cn('h-full', mobileTab !== 'files' && 'hidden')}>
             <FileTreePanel files={files} isLoading={filesLoading} onFileSelect={handleFileSelect} selectedFile={selectedFile} />
           </div>
           <div className={cn('h-full', mobileTab !== 'code' && 'hidden')}>
             <ReadOnlyEditorPanel projectId={projectId ?? ''} selectedFile={selectedFile} />
           </div>
-          <div className={cn('h-full', mobileTab !== 'chat' && 'hidden')}>
-            <ChatHistoryPanel projectId={projectId ?? ''} />
-          </div>
         </div>
 
         {/* Nav */}
         <nav className="flex h-14 shrink-0 items-center justify-around border-t border-border bg-surface" aria-label="Navigation">
-          <MobileTabButton active={mobileTab === 'files'} icon={FolderTree} label="Files" onClick={() => setMobileTab('files')} />
-          <MobileTabButton active={mobileTab === 'code'} icon={Code2} label="Code" onClick={() => setMobileTab('code')} />
-          <MobileTabButton active={mobileTab === 'chat'} icon={MessageCircle} label="Chat" onClick={() => setMobileTab('chat')} />
+          {mobileTabs.map((tab) => (
+            <MobileTabButton key={tab.id} active={mobileTab === tab.id} icon={tab.icon} label={tab.label} onClick={() => setMobileTab(tab.id)} />
+          ))}
         </nav>
       </div>
     )
@@ -509,17 +530,35 @@ export default function CommunityProjectPage() {
 
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
-        <aside className="w-56 shrink-0 overflow-hidden border-r border-border">
-          <FileTreePanel files={files} isLoading={filesLoading} onFileSelect={handleFileSelect} selectedFile={selectedFile} />
-        </aside>
+        {isChatFirst ? (
+          <>
+            <aside className="flex w-[380px] shrink-0 flex-col border-r border-border bg-surface">
+              <ChatHistoryPanel projectId={projectId ?? ''} />
+            </aside>
 
-        <main className="flex-1 overflow-hidden">
-          <ReadOnlyEditorPanel projectId={projectId ?? ''} selectedFile={selectedFile} />
-        </main>
+            <aside className="w-56 shrink-0 overflow-hidden border-r border-border">
+              <FileTreePanel files={files} isLoading={filesLoading} onFileSelect={handleFileSelect} selectedFile={selectedFile} />
+            </aside>
 
-        <aside className="flex w-[380px] shrink-0 flex-col border-l border-border bg-surface">
-          <ChatHistoryPanel projectId={projectId ?? ''} />
-        </aside>
+            <main className="flex-1 overflow-hidden">
+              <ReadOnlyEditorPanel projectId={projectId ?? ''} selectedFile={selectedFile} />
+            </main>
+          </>
+        ) : (
+          <>
+            <aside className="w-56 shrink-0 overflow-hidden border-r border-border">
+              <FileTreePanel files={files} isLoading={filesLoading} onFileSelect={handleFileSelect} selectedFile={selectedFile} />
+            </aside>
+
+            <main className="flex-1 overflow-hidden">
+              <ReadOnlyEditorPanel projectId={projectId ?? ''} selectedFile={selectedFile} />
+            </main>
+
+            <aside className="flex w-[380px] shrink-0 flex-col border-l border-border bg-surface">
+              <ChatHistoryPanel projectId={projectId ?? ''} />
+            </aside>
+          </>
+        )}
       </div>
     </div>
   )

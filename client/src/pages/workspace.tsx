@@ -16,6 +16,8 @@ import {
   Play,
   Settings,
   Send,
+  ArrowLeftRight,
+  Download,
   Square,
   MessageSquare,
   MessageCircle,
@@ -77,7 +79,7 @@ function MarkdownContent({ content }: { content: string }) {
 // ── File tree ────────────────────────────────────────────────────────
 
 function FileTreeNode({ entry, depth = 0, onFileSelect, selectedFile, fileOps }: { entry: FileTreeEntry; depth?: number; onFileSelect?: (path: string) => void; selectedFile?: string | null; fileOps?: ReturnType<typeof useFileOperations> }) {
-  const [expanded, setExpanded] = useState(depth < 2)
+  const [expanded, setExpanded] = useState(false)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const pl = depth * 12 + 8
 
@@ -1184,12 +1186,39 @@ function EditorPanel({ projectId, selectedFile, fileOps }: { projectId: string; 
 
 export default function WorkspacePage() {
   const { projectId } = useParams<{ projectId: string }>()
-  const { project, isLoading } = useProject(projectId ?? '')
+  const { project, isLoading, updateProject } = useProject(projectId ?? '')
   const { files, isLoading: filesLoading, refetch: refetchFiles } = useProjectFiles(projectId ?? '')
   const isMobile = useIsMobile()
   const [mobileTab, setMobileTab] = useState<'chat' | 'files' | 'code'>('chat')
+  const [layoutMode, setLayoutMode] = useState<string>('chat-first')
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const fileOps = useFileOperations(projectId ?? '')
+  const initialTabSetRef = useRef(false)
+
+  useEffect(() => {
+    if (project) {
+      setLayoutMode(project.layoutMode)
+      if (!initialTabSetRef.current) {
+        initialTabSetRef.current = true
+        setMobileTab(project.layoutMode === 'code-first' ? 'code' : 'chat')
+      }
+    }
+  }, [project])
+
+  const toggleLayout = useCallback(async () => {
+    const prevMode = layoutMode
+    const newMode = prevMode === 'chat-first' ? 'code-first' : 'chat-first'
+    setLayoutMode(newMode)
+    if (isMobile) setMobileTab(newMode === 'code-first' ? 'code' : 'chat')
+    try {
+      await updateProject({ layoutMode: newMode })
+    } catch {
+      setLayoutMode(prevMode)
+      if (isMobile) setMobileTab(prevMode === 'code-first' ? 'code' : 'chat')
+    }
+  }, [layoutMode, updateProject, isMobile])
+
+  const isChatFirst = layoutMode === 'chat-first'
 
   const handleFileSelect = useCallback((filePath: string) => {
     setSelectedFile(filePath)
@@ -1220,6 +1249,10 @@ export default function WorkspacePage() {
   }
 
   if (isMobile) {
+    const mobileTabs = isChatFirst
+      ? [{ id: 'chat' as const, icon: MessageCircle, label: 'Chat' }, { id: 'files' as const, icon: FolderTree, label: 'Files' }, { id: 'code' as const, icon: Code2, label: 'Code' }]
+      : [{ id: 'code' as const, icon: Code2, label: 'Code' }, { id: 'files' as const, icon: FolderTree, label: 'Files' }, { id: 'chat' as const, icon: MessageCircle, label: 'Chat' }]
+
     return (
       <div className="flex h-[100dvh] flex-col bg-background">
         <header className="flex h-11 shrink-0 items-center gap-3 border-b border-border bg-surface/80 backdrop-blur-sm px-3">
@@ -1228,6 +1261,17 @@ export default function WorkspacePage() {
           </Link>
           <span className="truncate text-sm font-medium text-text">{project.name}</span>
           <span className="shrink-0 rounded bg-accent px-1.5 py-0.5 text-[10px] text-text-dim">{project.software}</span>
+          <div className="ml-auto flex items-center gap-1.5">
+            <button onClick={toggleLayout} className="rounded-md p-1.5 text-text-dim hover:text-text-muted" title={isChatFirst ? 'Switch to Code First' : 'Switch to Chat First'}>
+              <ArrowLeftRight className="h-3.5 w-3.5" />
+            </button>
+            <a href={`/api/projects/${projectId}/download/zip`} download className="rounded-md p-1.5 text-text-dim hover:text-text-muted" title="Download project">
+              <Download className="h-3.5 w-3.5" />
+            </a>
+            <Link to={`/project/${projectId}/settings`} className="rounded-md p-1.5 text-text-dim hover:text-text-muted" title="Settings">
+              <Settings className="h-3.5 w-3.5" />
+            </Link>
+          </div>
         </header>
 
         <div className="flex-1 overflow-hidden">
@@ -1247,9 +1291,9 @@ export default function WorkspacePage() {
         </div>
 
         <nav className="flex h-14 shrink-0 items-center justify-around border-t border-border bg-surface" aria-label="Navigation">
-          <MobileTabButton active={mobileTab === 'chat'} icon={MessageCircle} label="Chat" onClick={() => setMobileTab('chat')} />
-          <MobileTabButton active={mobileTab === 'files'} icon={FolderTree} label="Files" onClick={() => setMobileTab('files')} />
-          <MobileTabButton active={mobileTab === 'code'} icon={Code2} label="Code" onClick={() => setMobileTab('code')} />
+          {mobileTabs.map((tab) => (
+            <MobileTabButton key={tab.id} active={mobileTab === tab.id} icon={tab.icon} label={tab.label} onClick={() => setMobileTab(tab.id)} />
+          ))}
         </nav>
       </div>
     )
@@ -1268,34 +1312,76 @@ export default function WorkspacePage() {
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={toggleLayout}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-text-muted transition-colors hover:bg-surface-hover hover:text-text"
+            title={isChatFirst ? 'Switch to Code First' : 'Switch to Chat First'}
+          >
+            <ArrowLeftRight className="h-3.5 w-3.5" />
+            {isChatFirst ? 'Chat First' : 'Code First'}
+          </button>
+          <button
             className="inline-flex items-center gap-1.5 rounded-md bg-success/10 px-3 py-1.5 text-xs font-medium text-success opacity-50"
             disabled
           >
             <Play className="h-3 w-3" />
             Compile
           </button>
-          <button className="rounded-md border border-border p-1.5 text-text-dim hover:text-text-muted">
+          <a
+            href={`/api/projects/${projectId}/download/zip`}
+            download
+            className="rounded-md border border-border p-1.5 text-text-dim transition-colors hover:bg-surface-hover hover:text-text-muted"
+            title="Download project as ZIP"
+          >
+            <Download className="h-4 w-4" />
+          </a>
+          <Link
+            to={`/project/${projectId}/settings`}
+            className="rounded-md border border-border p-1.5 text-text-dim transition-colors hover:bg-surface-hover hover:text-text-muted"
+            title="Project Settings"
+          >
             <Settings className="h-4 w-4" />
-          </button>
+          </Link>
         </div>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        <aside className="w-56 shrink-0 overflow-hidden border-r border-border">
-          <FileTreePanel files={files} filesLoading={filesLoading} refetchFiles={refetchFiles} onFileSelect={handleFileSelect} selectedFile={selectedFile} fileOps={fileOps} />
-        </aside>
+        {isChatFirst ? (
+          <>
+            <aside className="flex w-[400px] shrink-0 flex-col border-r border-border bg-surface">
+              <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+                <MessageSquare className="h-4 w-4 text-primary" />
+                <span className="text-sm font-medium text-text">AI Assistant</span>
+              </div>
+              <ChatPanel projectId={project.id} onRefreshFiles={refetchFiles} onFileSelect={handleFileSelect} />
+            </aside>
 
-        <main className="flex-1 overflow-hidden">
-          <EditorPanel projectId={project.id} selectedFile={selectedFile} fileOps={fileOps} />
-        </main>
+            <aside className="w-56 shrink-0 overflow-hidden border-r border-border">
+              <FileTreePanel files={files} filesLoading={filesLoading} refetchFiles={refetchFiles} onFileSelect={handleFileSelect} selectedFile={selectedFile} fileOps={fileOps} />
+            </aside>
 
-        <aside className="flex w-[400px] shrink-0 flex-col border-l border-border bg-surface">
-          <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-            <MessageSquare className="h-4 w-4 text-primary" />
-            <span className="text-sm font-medium text-text">AI Assistant</span>
-          </div>
-          <ChatPanel projectId={project.id} onRefreshFiles={refetchFiles} onFileSelect={handleFileSelect} />
-        </aside>
+            <main className="flex-1 overflow-hidden">
+              <EditorPanel projectId={project.id} selectedFile={selectedFile} fileOps={fileOps} />
+            </main>
+          </>
+        ) : (
+          <>
+            <aside className="w-56 shrink-0 overflow-hidden border-r border-border">
+              <FileTreePanel files={files} filesLoading={filesLoading} refetchFiles={refetchFiles} onFileSelect={handleFileSelect} selectedFile={selectedFile} fileOps={fileOps} />
+            </aside>
+
+            <main className="flex-1 overflow-hidden">
+              <EditorPanel projectId={project.id} selectedFile={selectedFile} fileOps={fileOps} />
+            </main>
+
+            <aside className="flex w-[400px] shrink-0 flex-col border-l border-border bg-surface">
+              <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+                <MessageSquare className="h-4 w-4 text-primary" />
+                <span className="text-sm font-medium text-text">AI Assistant</span>
+              </div>
+              <ChatPanel projectId={project.id} onRefreshFiles={refetchFiles} onFileSelect={handleFileSelect} />
+            </aside>
+          </>
+        )}
       </div>
     </div>
   )

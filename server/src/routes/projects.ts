@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { eq, and, desc, sql, inArray } from 'drizzle-orm'
 import crypto from 'crypto'
 import { mkdir, readdir, readFile, writeFile, rm, stat, rename as fsRename } from 'fs/promises'
+import archiver from 'archiver'
 import path from 'path'
 import { db } from '../db/index.js'
 import { projects } from '../db/schema/projects.js'
@@ -15,21 +16,26 @@ import { opencodeBridge } from '../bridges/index.js'
 const createProjectSchema = z.object({
   name: z.string().min(2).max(128),
   description: z.string().max(1000).optional(),
+  logo: z.string().optional(),
+  versions: z.string().optional(),
   software: z.string().max(32).default('paper'),
   language: z.enum(['java', 'kotlin']).default('java'),
   javaVersion: z.string().max(8).default('21'),
-  compiler: z.enum(['maven', 'gradle']).default('gradle'),
+  compiler: z.enum(['maven', 'gradle', 'both']).default('gradle'),
   visibility: z.enum(['public', 'private']).default('private'),
 })
 
 const updateProjectSchema = z.object({
   name: z.string().min(2).max(128).optional(),
   description: z.string().max(1000).nullable().optional(),
+  logo: z.string().nullable().optional(),
+  versions: z.string().nullable().optional(),
+  layoutMode: z.string().optional(),
   status: z.enum(['active', 'archived']).optional(),
   software: z.string().max(32).optional(),
   language: z.enum(['java', 'kotlin']).optional(),
   javaVersion: z.string().max(8).optional(),
-  compiler: z.enum(['maven', 'gradle']).optional(),
+  compiler: z.enum(['maven', 'gradle', 'both']).optional(),
   visibility: z.enum(['public', 'private']).optional(),
 })
 
@@ -130,11 +136,35 @@ export async function projectRoutes(app: FastifyInstance) {
 
     const sessionIds = sessionRows.map((s) => s.id)
 
+    // Count files in project directory
+    const projectDir = project.linkId ? `/home/auroracraft-${request.user!.username}/${project.linkId}` : null
+    let fileCount = 0
+    if (projectDir) {
+      try {
+        const countFiles = async (dir: string): Promise<number> => {
+          let count = 0
+          const entries = await readdir(dir, { withFileTypes: true })
+          for (const entry of entries) {
+            if (entry.name.startsWith('.')) continue
+            if (entry.isDirectory()) {
+              count += await countFiles(path.join(dir, entry.name))
+            } else {
+              count++
+            }
+          }
+          return count
+        }
+        fileCount = await countFiles(projectDir)
+      } catch {
+        fileCount = 0
+      }
+    }
+
     if (sessionIds.length === 0) {
       return {
         userMessages: 0,
         aiMessages: 0,
-        fileActions: 0,
+        files: fileCount,
         tokensUsed: 0,
         createdAt: project.createdAt,
       }
@@ -149,15 +179,10 @@ export async function projectRoutes(app: FastifyInstance) {
     const userMessages = messageCounts.find((m) => m.role === 'user')?.count ?? 0
     const aiMessages = messageCounts.find((m) => m.role === 'agent')?.count ?? 0
 
-    const [logCount] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(agentLogs)
-      .where(and(inArray(agentLogs.sessionId, sessionIds), eq(agentLogs.logType, 'file-action')))
-
     return {
       userMessages,
       aiMessages,
-      fileActions: logCount?.count ?? 0,
+      files: fileCount,
       tokensUsed: 0,
       createdAt: project.createdAt,
     }
@@ -517,5 +542,49 @@ export async function projectRoutes(app: FastifyInstance) {
     }
 
     return { success: true, oldPath: parsed.data.oldPath, newPath: parsed.data.newPath }
+  })
+
+  // Download project as ZIP
+  app.get('/api/projects/:id/download/zip', { preHandler: [authMiddleware] }, async (request, reply) => {
+    const { id } = request.params as { id: string }
+
+    const [project] = await db
+      .select()
+      .from(projects)
+      .where(and(eq(projects.id, id), eq(projects.userId, request.user!.id)))
+      .limit(1)
+
+    if (!project) {
+      return reply.status(404).send({ message: 'Project not found', statusCode: 404 })
+    }
+
+    if (!project.linkId) {
+      return reply.status(404).send({ message: 'Project files not found', statusCode: 404 })
+    }
+
+    const username = request.user!.username
+    const projectDir = `/home/auroracraft-${username}/${project.linkId}`
+
+    try {
+      await stat(projectDir)
+    } catch {
+      return reply.status(404).send({ message: 'Project files not found', statusCode: 404 })
+    }
+
+    const safeName = project.name.replace(/[^a-zA-Z0-9_-]/g, '_')
+    const archive = archiver('zip', { zlib: { level: 6 } })
+
+    archive.on('error', (err) => {
+      app.log.error({ err, projectId: id }, 'Archive error')
+      reply.raw.destroy(err)
+    })
+
+    archive.directory(projectDir, false)
+    void archive.finalize()
+
+    reply.header('Content-Type', 'application/zip')
+    reply.header('Content-Disposition', `attachment; filename="${safeName}.zip"`)
+
+    return reply.send(archive)
   })
 }

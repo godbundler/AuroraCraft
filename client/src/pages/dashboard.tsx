@@ -107,21 +107,33 @@ export default function DashboardPage() {
                   to={`/workspace/${project.id}`}
                   className="block p-5"
                 >
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1 pr-8">
+                  <div className="flex items-start gap-3">
+                    {project.logo && (
+                      <img 
+                        src={project.logo} 
+                        alt={`${project.name} logo`} 
+                        className="h-12 w-12 shrink-0 rounded-lg border border-border object-cover"
+                      />
+                    )}
+                    <div className="flex-1 min-w-0 pr-8">
                       <h3 className="font-medium text-text group-hover:text-primary">
                         {project.name}
                       </h3>
                       {project.description && (
                         <p className="mt-1 line-clamp-2 text-xs text-text-dim">{project.description}</p>
                       )}
-                      <div className="mt-2 flex items-center gap-2">
+                      <div className="mt-2 flex items-center gap-2 flex-wrap">
                         <span className="rounded bg-accent px-2 py-0.5 text-xs text-text-muted">
                           {project.software}
                         </span>
                         <span className="rounded bg-accent px-2 py-0.5 text-xs text-text-muted">
                           {project.language}
                         </span>
+                        {project.versions && (
+                          <span className="rounded bg-accent px-2 py-0.5 text-xs text-text-muted">
+                            {project.versions.split(',')[0]}{project.versions.split(',').length > 1 ? ` +${project.versions.split(',').length - 1}` : ''}
+                          </span>
+                        )}
                         {project.status === 'archived' && (
                           <span className="flex items-center gap-1 rounded bg-warning/10 px-2 py-0.5 text-xs text-warning">
                             <Archive className="h-3 w-3" />

@@ -1,0 +1,1 @@
+ALTER TYPE "public"."project_compiler" ADD VALUE IF NOT EXISTS 'both';

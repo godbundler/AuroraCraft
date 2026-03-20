@@ -3,7 +3,7 @@ import { users } from './users'
 
 export const projectStatusEnum = pgEnum('project_status', ['active', 'archived'])
 export const languageEnum = pgEnum('project_language', ['java', 'kotlin'])
-export const compilerEnum = pgEnum('project_compiler', ['maven', 'gradle'])
+export const compilerEnum = pgEnum('project_compiler', ['maven', 'gradle', 'both'])
 export const visibilityEnum = pgEnum('project_visibility', ['public', 'private'])
 
 export const projects = pgTable('projects', {
@@ -12,6 +12,9 @@ export const projects = pgTable('projects', {
   name: varchar('name', { length: 128 }).notNull(),
   linkId: varchar('link_id', { length: 128 }).unique(),
   description: text('description'),
+  logo: text('logo'),
+  versions: text('versions'),
+  layoutMode: varchar('layout_mode', { length: 16 }).default('chat-first').notNull(),
   status: projectStatusEnum('status').default('active').notNull(),
   software: varchar('software', { length: 32 }).default('paper').notNull(),
   language: languageEnum('language').default('java').notNull(),

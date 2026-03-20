@@ -15,6 +15,9 @@ const communityProjectSelect = {
   id: projects.id,
   name: projects.name,
   description: projects.description,
+  logo: projects.logo,
+  versions: projects.versions,
+  layoutMode: projects.layoutMode,
   software: projects.software,
   language: projects.language,
   javaVersion: projects.javaVersion,
@@ -274,6 +277,7 @@ export async function communityRoutes(app: FastifyInstance) {
 
     archive.on('error', (err) => {
       app.log.error({ err, projectId: id }, 'Archive error')
+      reply.raw.destroy(err)
     })
 
     archive.directory(projectDir, false)

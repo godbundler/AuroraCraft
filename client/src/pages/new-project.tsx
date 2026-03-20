@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
-import { ArrowLeft, ArrowRight, Check } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, Square, CheckSquare } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useProjects } from '@/hooks/use-projects'
 
@@ -25,20 +25,66 @@ export default function NewProjectPage() {
   const { createProject, isCreating } = useProjects()
   const [step, setStep] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  const [logoPreview, setLogoPreview] = useState<string | null>(null)
   const [form, setForm] = useState({
     name: '',
+    description: '',
+    logo: '',
+    versions: [] as string[],
     software: 'paper',
     language: 'java' as 'java' | 'kotlin',
     javaVersion: '21',
-    compiler: 'gradle',
+    compilers: ['gradle'] as string[],
     source: 'blank' as 'blank' | 'zip' | 'github',
   })
+
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    
+    if (!file.type.startsWith('image/')) {
+      setError('Please select a valid image file')
+      return
+    }
+    
+    if (file.size > 2 * 1024 * 1024) {
+      setError('Image size must be less than 2MB')
+      return
+    }
+    
+    const reader = new FileReader()
+    reader.onload = (event) => {
+      const base64 = event.target?.result as string
+      setForm(prev => ({ ...prev, logo: base64 }))
+      setLogoPreview(base64)
+      setError(null)
+    }
+    reader.onerror = () => {
+      setError('Failed to read image file')
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const removeLogo = () => {
+    setForm({ ...form, logo: '' })
+    setLogoPreview(null)
+  }
+
+  const addVersion = (version: string) => {
+    if (!version.trim()) return
+    if (form.versions.includes(version.trim())) return
+    setForm({ ...form, versions: [...form.versions, version.trim()] })
+  }
+
+  const removeVersion = (version: string) => {
+    setForm({ ...form, versions: form.versions.filter(v => v !== version) })
+  }
 
   const canProceed = () => {
     switch (step) {
       case 0: return form.name.trim().length >= 2
       case 1: return !!form.software
-      case 2: return !!form.compiler && !!form.javaVersion
+      case 2: return form.compilers.length > 0 && !!form.javaVersion
       case 3: return !!form.source
       default: return false
     }
@@ -47,12 +93,16 @@ export default function NewProjectPage() {
   const handleCreate = async () => {
     setError(null)
     try {
+      const compilerValue = form.compilers.length === 2 ? 'both' : form.compilers[0] as 'maven' | 'gradle'
       const project = await createProject({
         name: form.name.trim(),
+        description: form.description.trim() || undefined,
+        logo: form.logo || undefined,
+        versions: form.versions.length > 0 ? form.versions.join(',') : undefined,
         software: form.software,
         language: form.language,
         javaVersion: form.javaVersion,
-        compiler: form.compiler as 'maven' | 'gradle',
+        compiler: compilerValue,
       })
       navigate(`/workspace/${project.id}`)
     } catch (err: unknown) {
@@ -123,6 +173,49 @@ export default function NewProjectPage() {
               />
             </div>
             <div>
+              <label className="mb-1.5 block text-sm font-medium text-text">Description (Optional)</label>
+              <textarea
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                rows={3}
+                className="w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm text-text placeholder:text-text-dim focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                placeholder="A brief description of your plugin..."
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-text">Project Logo (Optional)</label>
+              {logoPreview ? (
+                <div className="flex items-center gap-4">
+                  <img src={logoPreview} alt="Logo preview" className="h-20 w-20 rounded-lg border border-border object-cover" />
+                  <button
+                    onClick={removeLogo}
+                    className="text-sm text-destructive hover:text-destructive/80"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ) : (
+                <div className="relative">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleLogoUpload}
+                    className="hidden"
+                    id="logo-upload"
+                  />
+                  <label
+                    htmlFor="logo-upload"
+                    className="flex cursor-pointer items-center justify-center rounded-lg border-2 border-dashed border-border bg-surface px-4 py-8 text-sm text-text-muted transition-colors hover:border-primary hover:bg-surface-hover"
+                  >
+                    <div className="text-center">
+                      <p>Click to upload image</p>
+                      <p className="mt-1 text-xs text-text-dim">PNG, JPG, GIF up to 2MB</p>
+                    </div>
+                  </label>
+                </div>
+              )}
+            </div>
+            <div>
               <label className="mb-1.5 block text-sm font-medium text-text">Project Type</label>
               <div className="rounded-lg border border-primary bg-primary/5 px-4 py-3">
                 <p className="text-sm font-medium text-text">Minecraft Plugin</p>
@@ -164,6 +257,52 @@ export default function NewProjectPage() {
                 ))}
               </div>
             </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-text">Minecraft Versions (Optional)</label>
+              <p className="mb-2 text-xs text-text-muted">Add supported versions (1.8 - 1.21.x)</p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="e.g., 1.20.1"
+                  className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm text-text placeholder:text-text-dim focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      addVersion(e.currentTarget.value)
+                      e.currentTarget.value = ''
+                    }
+                  }}
+                />
+                <button
+                  onClick={(e) => {
+                    const input = e.currentTarget.previousElementSibling as HTMLInputElement
+                    addVersion(input.value)
+                    input.value = ''
+                  }}
+                  className="rounded-lg border border-border px-4 py-2 text-sm text-text-muted transition-colors hover:bg-surface-hover"
+                >
+                  Add
+                </button>
+              </div>
+              {form.versions.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {form.versions.map((v) => (
+                    <span
+                      key={v}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2 py-1 text-xs text-text"
+                    >
+                      {v}
+                      <button
+                        onClick={() => removeVersion(v)}
+                        className="text-text-dim hover:text-destructive"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -201,33 +340,39 @@ export default function NewProjectPage() {
               </select>
             </div>
             <div>
-              <label className="mb-3 block text-sm font-medium text-text">Build Tool</label>
+              <label className="mb-3 block text-sm font-medium text-text">Build Tool(s)</label>
+              <p className="mb-2 text-xs text-text-muted">Select one or both build tools</p>
               <div className="space-y-2">
-                {compilers.map((c) => (
-                  <button
-                    key={c.value}
-                    onClick={() => setForm({ ...form, compiler: c.value })}
-                    className={cn(
-                      'flex w-full items-center gap-3 rounded-lg border px-4 py-3 text-left transition-colors',
-                      form.compiler === c.value
-                        ? 'border-primary bg-primary/5'
-                        : 'border-border hover:border-border-bright hover:bg-surface-hover'
-                    )}
-                  >
-                    <div className={cn(
-                      'flex h-4 w-4 shrink-0 items-center justify-center rounded-full border',
-                      form.compiler === c.value
-                        ? 'border-primary bg-primary'
-                        : 'border-border'
-                    )}>
-                      {form.compiler === c.value && <div className="h-2 w-2 rounded-full bg-white" />}
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-text">{c.label}</p>
-                      <p className="text-xs text-text-muted">{c.description}</p>
-                    </div>
-                  </button>
-                ))}
+                {compilers.map((c) => {
+                  const isSelected = form.compilers.includes(c.value)
+                  return (
+                    <button
+                      key={c.value}
+                      onClick={() => {
+                        const next = isSelected
+                          ? form.compilers.filter(v => v !== c.value)
+                          : [...form.compilers, c.value]
+                        if (next.length > 0) setForm({ ...form, compilers: next })
+                      }}
+                      className={cn(
+                        'flex w-full items-center gap-3 rounded-lg border px-4 py-3 text-left transition-colors',
+                        isSelected
+                          ? 'border-primary bg-primary/5'
+                          : 'border-border hover:border-border-bright hover:bg-surface-hover'
+                      )}
+                    >
+                      {isSelected ? (
+                        <CheckSquare className="h-4 w-4 shrink-0 text-primary" />
+                      ) : (
+                        <Square className="h-4 w-4 shrink-0 text-border" />
+                      )}
+                      <div>
+                        <p className="text-sm font-medium text-text">{c.label}</p>
+                        <p className="text-xs text-text-muted">{c.description}</p>
+                      </div>
+                    </button>
+                  )
+                })}
               </div>
             </div>
           </div>

@@ -13,11 +13,14 @@ export interface Project {
   name: string
   linkId: string | null
   description: string | null
+  logo: string | null
+  versions: string | null
+  layoutMode: string
   status: 'active' | 'archived'
   software: string
   language: 'java' | 'kotlin'
   javaVersion: string
-  compiler: 'maven' | 'gradle'
+  compiler: 'maven' | 'gradle' | 'both'
   visibility: 'public' | 'private'
   createdAt: string
   updatedAt: string
@@ -26,27 +29,32 @@ export interface Project {
 export interface CreateProjectInput {
   name: string
   description?: string
+  logo?: string
+  versions?: string
   software?: string
   language?: 'java' | 'kotlin'
   javaVersion?: string
-  compiler?: 'maven' | 'gradle'
+  compiler?: 'maven' | 'gradle' | 'both'
 }
 
 export interface UpdateProjectInput {
   name?: string
   description?: string | null
+  logo?: string | null
+  versions?: string | null
+  layoutMode?: string
   status?: 'active' | 'archived'
   software?: string
   language?: 'java' | 'kotlin'
   javaVersion?: string
-  compiler?: 'maven' | 'gradle'
+  compiler?: 'maven' | 'gradle' | 'both'
   visibility?: 'public' | 'private'
 }
 
 export interface ProjectStats {
   userMessages: number
   aiMessages: number
-  fileActions: number
+  files: number
   tokensUsed: number
   createdAt: string
 }
@@ -55,10 +63,13 @@ export interface CommunityProject {
   id: string
   name: string
   description: string | null
+  logo: string | null
+  versions: string | null
+  layoutMode: string
   software: string
   language: 'java' | 'kotlin'
   javaVersion: string
-  compiler: 'maven' | 'gradle'
+  compiler: 'maven' | 'gradle' | 'both'
   visibility: 'public' | 'private'
   createdAt: string
   updatedAt: string
@@ -125,7 +136,7 @@ export interface AdminProject {
   status: 'active' | 'archived'
   software: string
   language: 'java' | 'kotlin'
-  compiler: 'maven' | 'gradle'
+  compiler: 'maven' | 'gradle' | 'both'
   createdAt: string
   updatedAt: string
   ownerUsername: string | null

@@ -38,15 +38,23 @@ function ProjectCard({ project }: { project: CommunityProject }) {
       to={`/community/${project.id}`}
       className="group rounded-xl border border-border bg-surface p-5 transition-all hover:border-border-bright hover:bg-surface-hover hover:shadow-lg hover:shadow-primary/5"
     >
-      <div className="flex items-start justify-between">
-        <h3 className="font-medium text-text group-hover:text-primary transition-colors">
-          {project.name}
-        </h3>
-      </div>
-
-      <div className="mt-1.5 flex items-center gap-1.5 text-xs text-text-dim">
-        <User className="h-3 w-3" />
-        <span>@{project.ownerUsername}</span>
+      <div className="flex items-start gap-3">
+        {project.logo && (
+          <img 
+            src={project.logo} 
+            alt={`${project.name} logo`} 
+            className="h-12 w-12 shrink-0 rounded-lg border border-border object-cover"
+          />
+        )}
+        <div className="flex-1 min-w-0">
+          <h3 className="font-medium text-text group-hover:text-primary transition-colors">
+            {project.name}
+          </h3>
+          <div className="mt-1 flex items-center gap-1.5 text-xs text-text-dim">
+            <User className="h-3 w-3" />
+            <span>@{project.ownerUsername}</span>
+          </div>
+        </div>
       </div>
 
       {project.description && (
@@ -55,13 +63,18 @@ function ProjectCard({ project }: { project: CommunityProject }) {
         </p>
       )}
 
-      <div className="mt-3 flex items-center gap-2">
+      <div className="mt-3 flex items-center gap-2 flex-wrap">
         <span className="rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
           {project.software}
         </span>
         <span className="rounded bg-accent px-2 py-0.5 text-xs text-text-muted">
           {project.language}
         </span>
+        {project.versions && (
+          <span className="rounded bg-accent px-2 py-0.5 text-xs text-text-muted">
+            {project.versions.split(',')[0]}{project.versions.split(',').length > 1 ? ` +${project.versions.split(',').length - 1}` : ''}
+          </span>
+        )}
       </div>
 
       <p className="mt-3 text-[11px] text-text-dim">
