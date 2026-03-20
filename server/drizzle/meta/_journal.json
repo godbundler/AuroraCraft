@@ -36,6 +36,13 @@
       "when": 1773586542862,
       "tag": "0004_hard_corsair",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1773990116686,
+      "tag": "0005_heavy_scorpion",
+      "breakpoints": true
     }
   ]
 }

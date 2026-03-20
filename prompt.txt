@@ -1,1 +1,257 @@
-Now you are redy to improve the AuroraCraft. AuroraCraft is a Agentic AI Web APP. Users can create minecraft plugins from here. Whenever any user send any request to AuroraCraft, it sends the msg to OpenCode and then bridge the response back to chat. Every AuroraCraft user will have their own home in System, "/home/auroracraft-user_name/". Whenever a any user creates a project, it will be created at "/home/auroracraft-user_name/project_link_id/". Whenever any user msg the AI first time in chat, AuroraCraft will create a new session in OpenCode and send msg to OpenCode for task execution. (It will run OpenCode at "/home/auroracraft-user_name/project_link_id/") The new session name will be the project_link_id. Whenever the user send another msg to the chat, AuroraCraft find that session and send the new msg to that session. AuroraCraft will currently use free models provided by OpenCode, "MiniMax M2.5" & "big Pickle". OpenCode and the AI Models will show in Admin Panel, "ClaudeCode", "Codex" will be added in future. Now let me say about about exact bridge. All the thinking will be shown properly in a file badge with live update in chat. When OpenCode starts thinking, AuroraCraft will create thinking file badge in chat, when it think anything, the text will appear with live update. (It will never work like that, OpenCode ends the entire thinking then the thinking badge appear) As default when OpenCode is doing thinking, the thinking badge will be opened, as soon as it ends thinking, the badge will be closed. When OpenCode is creating/updating/renaming/deleting any file, the file badge will appear with "creating/updating/renaming/deleting/reading file_path/file_name ...."  with gray colour. When it ends creating/updating/renaming/deleting any file it will show "created/updated/renamed/deleted/read file_path/file_name" with green, orange, yellow, red, blue colour as needed. As soon as it did any file change it will be shown in project workspace fire tree. When OpenCode is responding, AuroraCraft will properly bridge it to the chat by live text update. (It will not wait for OpenCode to send the entire response). Whenever OpenCode create a to-do-list, it will be created in the chat, with completed tasks, ongoing task and remaining tasks with live update. Last msg: AuroraCraft will not wait for OpenCode to complete the entire task and Dump it to chat, it will show and dump everything in chat with live text by text update with file, thinking badges, to-do-list as needed. Make sure that the chat support H1, H2, H3 .. Bold, Italic, Strikethrough etc etc all .md file formats. At last do testing by creating a new project, reviewing it in home, sending simple "hi" msg, and full RTP Plugin generation text with live update from OpenCode sending msg "Create a RTP Minecraft Plugin". Think step by step, do huge deep proper internet research, do end to end testing and make it properly.
+You are a senior full-stack engineer.
+
+You are working on AuroraCraft, a production-grade AI-powered development platform.
+
+The UI, authentication, and project menu already exist.
+
+Your task is to implement the Community System + Public/Private Projects + Forking System.
+
+Do NOT implement:
+
+- AI agent logic
+- Memory system
+- Knowledge system
+- Compilation logic (already handled elsewhere)
+
+Focus ONLY on community + project sharing system.
+
+────────────────────────────
+CORE FEATURES TO BUILD
+────────────────────────────
+
+1) Public / Private Projects
+2) Community Creations Page
+3) Project Forking
+4) Project Download (ZIP + compiled JAR placeholder)
+
+────────────────────────────
+1️⃣ PROJECT VISIBILITY SYSTEM
+────────────────────────────
+
+Each project must have:
+
+- visibility: "private" | "public"
+
+Rules:
+
+- Private → only owner can access
+- Public → visible in Community page
+- Only owner can change visibility
+
+Backend:
+
+PATCH /project/:id/visibility
+
+Validate:
+
+- user must own project
+
+────────────────────────────
+2️⃣ COMMUNITY PAGE
+────────────────────────────
+
+Route:
+
+/community
+
+Display:
+
+- List of all public projects
+- Project cards showing:
+  - Project Name
+  - Owner Username
+  - Description
+  - Software (Paper, Spigot, etc.)
+  - Language
+  - Created Date
+
+Features:
+
+- Search by project name
+- Filter by:
+  - Software
+  - Language
+- Sort:
+  - Newest
+  - Oldest
+
+UI must match dark theme, clean SaaS style.
+
+────────────────────────────
+3️⃣ COMMUNITY PROJECT VIEW
+────────────────────────────
+
+Route:
+
+/community/:projectId
+
+Read-only view.
+
+Display:
+
+- Project info
+- File tree (read-only)
+- Code viewer (Monaco read-only)
+- Chat history (read-only)
+
+Restrictions:
+
+- No editing
+- No AI interaction
+- No file modification
+
+────────────────────────────
+4️⃣ PROJECT FORKING SYSTEM
+────────────────────────────
+
+Feature:
+
+Users can fork public projects into their own account.
+
+Button:
+
+"Fork Project"
+
+Flow:
+
+1. User clicks fork
+
+2. System creates new project:
+   
+   - new project_id
+   - user_id = current user
+   - copy all metadata
+
+3. Copy filesystem:
+
+From:
+/home/auroracraft-owner/project/
+
+To:
+/home/auroracraft-user/forked-project/
+
+4. Copy database data:
+
+- project record
+- optionally file action history
+
+5. Redirect user to new project workspace
+
+Rules:
+
+- Only logged-in users can fork
+- Forked project becomes PRIVATE by default
+
+────────────────────────────
+5️⃣ PROJECT DOWNLOAD SYSTEM
+────────────────────────────
+
+In community project view:
+
+Add buttons:
+
+- Download Source (.zip)
+- Download Compiled (.jar) [placeholder]
+
+Backend:
+
+GET /project/:id/download/zip
+
+Implementation:
+
+- Zip project directory
+- Stream file to user
+
+Security:
+
+- Only allow if project is public OR user owns project
+
+────────────────────────────
+BACKEND REQUIREMENTS
+────────────────────────────
+
+Add/extend database:
+
+projects table:
+
+- visibility (public/private)
+- description
+
+community_projects (optional or derived):
+
+- project_id
+- indexed for fast lookup
+
+Endpoints:
+
+GET /community/projects
+GET /community/project/:id
+POST /project/:id/fork
+GET /project/:id/download/zip
+
+────────────────────────────
+FILESYSTEM REQUIREMENTS
+────────────────────────────
+
+Use safe copy:
+
+- recursive directory copy
+- validate paths
+- prevent cross-user access
+
+Ensure:
+
+Users cannot access other users’ private directories.
+
+────────────────────────────
+STATE MANAGEMENT
+────────────────────────────
+
+Frontend:
+
+- TanStack Query for fetching
+- Zustand for UI state
+
+Handle:
+
+- loading
+- empty state
+- error state
+
+────────────────────────────
+UI REQUIREMENTS
+────────────────────────────
+
+- Dark theme
+- Blue gradient accents
+- Clean cards
+- Smooth transitions
+
+Project cards must look modern and minimal.
+
+No clutter.
+
+────────────────────────────
+IMPORTANT RULES
+────────────────────────────
+
+- Do NOT implement AI logic
+- Do NOT simulate agent responses
+- Do NOT break existing project system
+- Keep system modular and scalable
+- Ensure security in filesystem operations
+
+────────────────────────────
+DELIVERABLE
+────────────────────────────
+
+- Fully functional community page
+- Public/private project system
+- Forking system with filesystem copy
+- Download system (ZIP)
+- Clean backend APIs
+- Scalable architecture
+
+Think carefully before coding.
+Design system flow before implementation.
+Build like a real SaaS platform.

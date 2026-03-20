@@ -18,6 +18,7 @@ export interface Project {
   language: 'java' | 'kotlin'
   javaVersion: string
   compiler: 'maven' | 'gradle'
+  visibility: 'public' | 'private'
   createdAt: string
   updatedAt: string
 }
@@ -39,6 +40,29 @@ export interface UpdateProjectInput {
   language?: 'java' | 'kotlin'
   javaVersion?: string
   compiler?: 'maven' | 'gradle'
+  visibility?: 'public' | 'private'
+}
+
+export interface ProjectStats {
+  userMessages: number
+  aiMessages: number
+  fileActions: number
+  tokensUsed: number
+  createdAt: string
+}
+
+export interface CommunityProject {
+  id: string
+  name: string
+  description: string | null
+  software: string
+  language: 'java' | 'kotlin'
+  javaVersion: string
+  compiler: 'maven' | 'gradle'
+  visibility: 'public' | 'private'
+  createdAt: string
+  updatedAt: string
+  ownerUsername: string
 }
 
 export type AgentStatus = 'idle' | 'running' | 'completed' | 'failed' | 'cancelled'

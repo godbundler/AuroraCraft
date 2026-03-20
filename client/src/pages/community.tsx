@@ -1,26 +1,205 @@
-import { Globe } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Link } from 'react-router'
+import { Search, Globe, Filter, User } from 'lucide-react'
+import { useCommunityProjects } from '@/hooks/use-community'
+import type { CommunityProject } from '@/types'
+
+const softwareOptions = [
+  { value: '', label: 'All Software' },
+  { value: 'paper', label: 'Paper' },
+  { value: 'spigot', label: 'Spigot' },
+  { value: 'bukkit', label: 'Bukkit' },
+  { value: 'velocity', label: 'Velocity' },
+  { value: 'bungeecord', label: 'BungeeCord' },
+]
+
+const languageOptions = [
+  { value: '', label: 'All Languages' },
+  { value: 'java', label: 'Java' },
+  { value: 'kotlin', label: 'Kotlin' },
+]
+
+const sortOptions = [
+  { value: 'newest', label: 'Newest' },
+  { value: 'oldest', label: 'Oldest' },
+]
+
+function formatDate(dateStr: string): string {
+  return new Date(dateStr).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+}
+
+function ProjectCard({ project }: { project: CommunityProject }) {
+  return (
+    <Link
+      to={`/community/${project.id}`}
+      className="group rounded-xl border border-border bg-surface p-5 transition-all hover:border-border-bright hover:bg-surface-hover hover:shadow-lg hover:shadow-primary/5"
+    >
+      <div className="flex items-start justify-between">
+        <h3 className="font-medium text-text group-hover:text-primary transition-colors">
+          {project.name}
+        </h3>
+      </div>
+
+      <div className="mt-1.5 flex items-center gap-1.5 text-xs text-text-dim">
+        <User className="h-3 w-3" />
+        <span>@{project.ownerUsername}</span>
+      </div>
+
+      {project.description && (
+        <p className="mt-2.5 line-clamp-2 text-xs text-text-dim leading-relaxed">
+          {project.description}
+        </p>
+      )}
+
+      <div className="mt-3 flex items-center gap-2">
+        <span className="rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+          {project.software}
+        </span>
+        <span className="rounded bg-accent px-2 py-0.5 text-xs text-text-muted">
+          {project.language}
+        </span>
+      </div>
+
+      <p className="mt-3 text-[11px] text-text-dim">
+        Created {formatDate(project.createdAt)}
+      </p>
+    </Link>
+  )
+}
 
 export default function CommunityPage() {
+  const [searchInput, setSearchInput] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [software, setSoftware] = useState('')
+  const [language, setLanguage] = useState('')
+  const [sort, setSort] = useState<'newest' | 'oldest'>('newest')
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchInput), 300)
+    return () => clearTimeout(timer)
+  }, [searchInput])
+
+  const { projects, isLoading } = useCommunityProjects({
+    search: debouncedSearch || undefined,
+    software: software || undefined,
+    language: language || undefined,
+    sort,
+  })
+
   return (
-    <div className="mx-auto max-w-7xl px-4 py-24 sm:px-6">
+    <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6">
+      {/* Hero */}
       <div className="mx-auto max-w-2xl text-center">
+        <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/5 px-4 py-1.5">
+          <Globe className="h-4 w-4 text-primary" />
+          <span className="text-xs font-medium text-primary">Community</span>
+        </div>
         <h1 className="text-3xl font-bold tracking-tight text-text sm:text-4xl">
-          Community Creations
+          Community{' '}
+          <span className="bg-gradient-to-r from-primary to-blue-400 bg-clip-text text-transparent">
+            Creations
+          </span>
         </h1>
-        <p className="mt-4 text-text-muted">
-          Discover plugins built by the AuroraCraft community
+        <p className="mt-3 text-text-muted">
+          Discover and fork Minecraft plugins built by the AuroraCraft community
         </p>
       </div>
 
-      <div className="mt-16 flex flex-col items-center text-center">
-        <div className="rounded-2xl bg-primary/10 p-4">
-          <Globe className="h-8 w-8 text-primary" />
+      {/* Filters */}
+      <div className="mt-10 flex flex-wrap items-center gap-3">
+        <div className="relative flex-1 min-w-[200px]">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-dim" />
+          <input
+            type="text"
+            placeholder="Search projects..."
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            className="w-full rounded-lg border border-border bg-surface py-2.5 pl-9 pr-3 text-sm text-text placeholder:text-text-dim focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+          />
         </div>
-        <h2 className="mt-4 text-lg font-semibold text-text">No community projects yet</h2>
-        <p className="mt-1 max-w-sm text-sm text-text-muted">
-          Community sharing is coming soon. Once available, you'll be able to browse and share plugins built with AuroraCraft.
-        </p>
+        <div className="flex items-center gap-2">
+          <Filter className="h-4 w-4 text-text-dim hidden sm:block" />
+          <select
+            value={software}
+            onChange={(e) => setSoftware(e.target.value)}
+            className="rounded-lg border border-border bg-surface px-3 py-2.5 text-sm text-text-muted focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+          >
+            {softwareOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+          <select
+            value={language}
+            onChange={(e) => setLanguage(e.target.value)}
+            className="rounded-lg border border-border bg-surface px-3 py-2.5 text-sm text-text-muted focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+          >
+            {languageOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as 'newest' | 'oldest')}
+            className="rounded-lg border border-border bg-surface px-3 py-2.5 text-sm text-text-muted focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+          >
+            {sortOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        </div>
       </div>
+
+      {/* Results */}
+      {isLoading ? (
+        <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className="animate-pulse rounded-xl border border-border bg-surface p-5">
+              <div className="h-5 w-32 rounded bg-border" />
+              <div className="mt-2 h-3 w-20 rounded bg-border" />
+              <div className="mt-3 h-3 w-full rounded bg-border" />
+              <div className="mt-1.5 h-3 w-2/3 rounded bg-border" />
+              <div className="mt-4 flex gap-2">
+                <div className="h-5 w-14 rounded bg-border" />
+                <div className="h-5 w-14 rounded bg-border" />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : projects.length > 0 ? (
+        <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {projects.map((project) => (
+            <ProjectCard key={project.id} project={project} />
+          ))}
+        </div>
+      ) : (
+        <div className="mt-20 flex flex-col items-center text-center">
+          <div className="rounded-2xl bg-primary/10 p-4">
+            <Globe className="h-8 w-8 text-primary" />
+          </div>
+          <h2 className="mt-4 text-lg font-semibold text-text">
+            {debouncedSearch || software || language
+              ? 'No projects match your filters'
+              : 'No community projects yet'}
+          </h2>
+          <p className="mt-1 max-w-sm text-sm text-text-muted">
+            {debouncedSearch || software || language
+              ? 'Try adjusting your search or filters to find what you\'re looking for.'
+              : 'Be the first! Make your project public from Project Settings to share it with the community.'}
+          </p>
+          {(debouncedSearch || software || language) && (
+            <button
+              onClick={() => { setSearchInput(''); setSoftware(''); setLanguage('') }}
+              className="mt-4 text-sm font-medium text-primary hover:text-primary-hover"
+            >
+              Clear all filters
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }

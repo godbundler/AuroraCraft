@@ -4,6 +4,7 @@ import { users } from './users'
 export const projectStatusEnum = pgEnum('project_status', ['active', 'archived'])
 export const languageEnum = pgEnum('project_language', ['java', 'kotlin'])
 export const compilerEnum = pgEnum('project_compiler', ['maven', 'gradle'])
+export const visibilityEnum = pgEnum('project_visibility', ['public', 'private'])
 
 export const projects = pgTable('projects', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -16,6 +17,7 @@ export const projects = pgTable('projects', {
   language: languageEnum('language').default('java').notNull(),
   javaVersion: varchar('java_version', { length: 8 }).default('21').notNull(),
   compiler: compilerEnum('compiler').default('gradle').notNull(),
+  visibility: visibilityEnum('visibility').default('private').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 })

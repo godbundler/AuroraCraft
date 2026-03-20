@@ -5,6 +5,7 @@ import { useState } from 'react'
 
 const publicLinks = [
   { label: 'Pricing', href: '/pricing' },
+  { label: 'Community', href: '/community' },
   { label: 'Docs', href: '/docs' },
 ]
 
@@ -44,12 +45,6 @@ export function Navbar() {
                 className="rounded-md px-3 py-2 text-sm text-text-muted transition-colors hover:text-text"
               >
                 Dashboard
-              </Link>
-              <Link
-                to="/community"
-                className="rounded-md px-3 py-2 text-sm text-text-muted transition-colors hover:text-text"
-              >
-                Community
               </Link>
               {user?.role === 'admin' && (
                 <Link

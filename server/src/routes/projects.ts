@@ -1,12 +1,14 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
-import { eq, and, desc } from 'drizzle-orm'
+import { eq, and, desc, sql, inArray } from 'drizzle-orm'
 import crypto from 'crypto'
 import { mkdir, readdir, readFile, writeFile, rm, stat, rename as fsRename } from 'fs/promises'
 import path from 'path'
 import { db } from '../db/index.js'
 import { projects } from '../db/schema/projects.js'
 import { agentSessions } from '../db/schema/agent-sessions.js'
+import { agentMessages } from '../db/schema/agent-messages.js'
+import { agentLogs } from '../db/schema/agent-logs.js'
 import { authMiddleware } from '../middleware/auth.js'
 import { opencodeBridge } from '../bridges/index.js'
 
@@ -17,6 +19,7 @@ const createProjectSchema = z.object({
   language: z.enum(['java', 'kotlin']).default('java'),
   javaVersion: z.string().max(8).default('21'),
   compiler: z.enum(['maven', 'gradle']).default('gradle'),
+  visibility: z.enum(['public', 'private']).default('private'),
 })
 
 const updateProjectSchema = z.object({
@@ -27,9 +30,10 @@ const updateProjectSchema = z.object({
   language: z.enum(['java', 'kotlin']).optional(),
   javaVersion: z.string().max(8).optional(),
   compiler: z.enum(['maven', 'gradle']).optional(),
+  visibility: z.enum(['public', 'private']).optional(),
 })
 
-function generateLinkId(name: string): string {
+export function generateLinkId(name: string): string {
   const slug = name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
@@ -39,14 +43,14 @@ function generateLinkId(name: string): string {
   return `${slug}-${hex}`
 }
 
-interface FileTreeEntry {
+export interface FileTreeEntry {
   name: string
   path: string
   type: 'file' | 'directory'
   children?: FileTreeEntry[]
 }
 
-async function readFileTree(dirPath: string, relativeTo: string, maxDepth: number): Promise<FileTreeEntry[]> {
+export async function readFileTree(dirPath: string, relativeTo: string, maxDepth: number): Promise<FileTreeEntry[]> {
   if (maxDepth <= 0) return []
 
   try {
@@ -103,6 +107,60 @@ export async function projectRoutes(app: FastifyInstance) {
     }
 
     return project
+  })
+
+  // Get project stats
+  app.get('/api/projects/:id/stats', { preHandler: [authMiddleware] }, async (request, reply) => {
+    const { id } = request.params as { id: string }
+
+    const [project] = await db
+      .select()
+      .from(projects)
+      .where(and(eq(projects.id, id), eq(projects.userId, request.user!.id)))
+      .limit(1)
+
+    if (!project) {
+      return reply.status(404).send({ message: 'Project not found', statusCode: 404 })
+    }
+
+    const sessionRows = await db
+      .select({ id: agentSessions.id })
+      .from(agentSessions)
+      .where(eq(agentSessions.projectId, id))
+
+    const sessionIds = sessionRows.map((s) => s.id)
+
+    if (sessionIds.length === 0) {
+      return {
+        userMessages: 0,
+        aiMessages: 0,
+        fileActions: 0,
+        tokensUsed: 0,
+        createdAt: project.createdAt,
+      }
+    }
+
+    const messageCounts = await db
+      .select({ role: agentMessages.role, count: sql<number>`count(*)::int` })
+      .from(agentMessages)
+      .where(inArray(agentMessages.sessionId, sessionIds))
+      .groupBy(agentMessages.role)
+
+    const userMessages = messageCounts.find((m) => m.role === 'user')?.count ?? 0
+    const aiMessages = messageCounts.find((m) => m.role === 'agent')?.count ?? 0
+
+    const [logCount] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(agentLogs)
+      .where(and(inArray(agentLogs.sessionId, sessionIds), eq(agentLogs.logType, 'file-action')))
+
+    return {
+      userMessages,
+      aiMessages,
+      fileActions: logCount?.count ?? 0,
+      tokensUsed: 0,
+      createdAt: project.createdAt,
+    }
   })
 
   // Create project

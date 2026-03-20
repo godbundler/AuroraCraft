@@ -11,6 +11,7 @@ import { healthRoutes } from './routes/health.js'
 import { projectRoutes } from './routes/projects.js'
 import { agentRoutes } from './routes/agents.js'
 import { adminRoutes } from './routes/admin.js'
+import { communityRoutes } from './routes/community.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -34,6 +35,7 @@ await app.register(healthRoutes)
 await app.register(projectRoutes)
 await app.register(agentRoutes)
 await app.register(adminRoutes)
+await app.register(communityRoutes)
 
 // Serve built client in production
 const clientDist = path.resolve(__dirname, '../../client/dist')

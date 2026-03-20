@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router'
-import { Plus, Search, MoreHorizontal, Trash2, Pencil, Archive } from 'lucide-react'
+import { Plus, Search, MoreHorizontal, Trash2, Pencil, Archive, Settings } from 'lucide-react'
 import { useProjects } from '@/hooks/use-projects'
 import { cn } from '@/lib/utils'
 import type { Project } from '@/types'
@@ -158,6 +158,14 @@ export default function DashboardPage() {
                         >
                           <Pencil className="h-3 w-3" />
                           Open Project
+                        </Link>
+                        <Link
+                          to={`/project/${project.id}/settings`}
+                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-text-muted hover:bg-surface-hover hover:text-text"
+                          onClick={() => setOpenMenu(null)}
+                        >
+                          <Settings className="h-3 w-3" />
+                          Project Settings
                         </Link>
                         <button
                           onClick={(e) => {

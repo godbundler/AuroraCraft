@@ -16,7 +16,9 @@ import ForgotPasswordPage from '@/pages/forgot-password'
 import DashboardPage from '@/pages/dashboard'
 import NewProjectPage from '@/pages/new-project'
 import WorkspacePage from '@/pages/workspace'
+import ProjectMenuPage from '@/pages/project-menu'
 import CommunityPage from '@/pages/community'
+import CommunityProjectPage from '@/pages/community-project'
 import AdminOverviewPage from '@/pages/admin/overview'
 import AdminUsersPage from '@/pages/admin/users'
 import AdminAIRuntimePage from '@/pages/admin/ai-runtime'
@@ -53,6 +55,18 @@ export function AppRoutes() {
         <Route
           path="workspace/:projectId"
           element={<ProtectedRoute><WorkspacePage /></ProtectedRoute>}
+        />
+
+        {/* Project Menu (full viewport, no footer) */}
+        <Route
+          path="project/:projectId/settings"
+          element={<ProtectedRoute><ProjectMenuPage /></ProtectedRoute>}
+        />
+
+        {/* Community project view (full viewport, read-only) */}
+        <Route
+          path="community/:projectId"
+          element={<CommunityProjectPage />}
         />
 
         {/* Admin panel */}
