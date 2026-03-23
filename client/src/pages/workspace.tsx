@@ -569,31 +569,51 @@ function ModelSelector({ selectedModel, onModelChange, disabled }: {
         <span className="max-w-[7rem] truncate">{current.name}</span>
         <ChevronDown className={cn('h-3 w-3 shrink-0 transition-transform', open && 'rotate-180')} />
       </button>
-      {open && (
-        <div className="absolute bottom-full left-0 z-50 mb-1 w-64 rounded-lg border border-border bg-surface shadow-lg">
-          <div className="p-1">
-            {AI_MODELS.map((model) => (
-              <button
-                key={model.id}
-                type="button"
-                onClick={() => { onModelChange(model.id); setOpen(false) }}
-                className={cn(
-                  'flex w-full flex-col rounded-md px-3 py-2 text-left transition-colors hover:bg-surface-hover',
-                  model.id === selectedModel && 'bg-primary/10'
-                )}
-              >
-                <div className="flex items-center gap-2">
-                  <span className={cn('text-xs font-medium', model.id === selectedModel ? 'text-primary' : 'text-text')}>
-                    {model.name}
-                  </span>
-                  <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] text-text-dim">{model.provider}</span>
-                </div>
-                <p className="mt-0.5 text-[11px] text-text-dim">{model.description}</p>
-              </button>
-            ))}
+      {open && (() => {
+        const opencodeModels = AI_MODELS.filter((m) => m.id.startsWith('opencode/'))
+        const kiroModels = AI_MODELS.filter((m) => m.id.startsWith('kiro/'))
+        const renderModel = (model: typeof AI_MODELS[number]) => (
+          <button
+            key={model.id}
+            type="button"
+            onClick={() => { onModelChange(model.id); setOpen(false) }}
+            className={cn(
+              'flex w-full flex-col rounded-md px-3 py-2 text-left transition-colors hover:bg-surface-hover',
+              model.id === selectedModel && 'bg-primary/10'
+            )}
+          >
+            <div className="flex items-center gap-2">
+              {model.id.startsWith('kiro/') && <Bot className="h-3 w-3 shrink-0 text-primary" />}
+              <span className={cn('text-xs font-medium', model.id === selectedModel ? 'text-primary' : 'text-text')}>
+                {model.name}
+              </span>
+              <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] text-text-dim">{model.provider}</span>
+            </div>
+            <p className="mt-0.5 text-[11px] text-text-dim">{model.description}</p>
+          </button>
+        )
+        return (
+          <div className="absolute bottom-full left-0 z-50 mb-1 w-64 rounded-lg border border-border bg-surface shadow-lg">
+            <div className="p-1">
+              {opencodeModels.length > 0 && (
+                <>
+                  <p className="px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-text-dim">OpenCode</p>
+                  {opencodeModels.map(renderModel)}
+                </>
+              )}
+              {opencodeModels.length > 0 && kiroModels.length > 0 && (
+                <div className="mx-2 my-1 border-t border-border" />
+              )}
+              {kiroModels.length > 0 && (
+                <>
+                  <p className="px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-primary/60">Kiro CLI</p>
+                  {kiroModels.map(renderModel)}
+                </>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
     </div>
   )
 }

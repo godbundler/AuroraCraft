@@ -20,13 +20,15 @@ export class KiroProcessManager {
     prompt: string,
     username: string,
     signal?: AbortSignal,
+    model?: string,
   ): KiroExecution {
     const sessionId = crypto.randomUUID()
     const escapedPrompt = escapeForSingleQuotes(prompt)
     const systemUser = `auroracraft-${username}`
     const homeDir = `/home/${systemUser}`
 
-    const command = `cd '${escapeForSingleQuotes(directory)}' && kiro-cli chat --no-interactive --trust-all-tools '${escapedPrompt}'`
+    const modelFlag = model ? ` --model '${escapeForSingleQuotes(model)}'` : ''
+    const command = `cd '${escapeForSingleQuotes(directory)}' && kiro-cli chat --no-interactive --trust-all-tools${modelFlag} '${escapedPrompt}'`
 
     console.log(`[KiroProcess] Spawning kiro-cli for session ${sessionId} (user: ${systemUser}, dir: ${directory})`)
 

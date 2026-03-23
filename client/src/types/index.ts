@@ -166,7 +166,14 @@ export const AI_MODELS: AIModel[] = [
   { id: 'opencode/mimo-v2-pro-free', name: 'MiMo V2 Pro', provider: 'Xiaomi', description: 'Free pro model optimized for code generation' },
   { id: 'opencode/mimo-v2-omni-free', name: 'MiMo V2 Omni', provider: 'Xiaomi', description: 'Free omni model with broad coding capabilities' },
   { id: 'opencode/nemotron-3-super-free', name: 'Nemotron 3 Super', provider: 'NVIDIA', description: 'Free NVIDIA model with strong reasoning' },
-  { id: 'kiro/default', name: 'Kiro CLI', provider: 'Amazon/AWS', description: 'AI coding agent via Kiro CLI' },
+  { id: 'kiro/auto', name: 'Kiro Auto', provider: 'Kiro', description: 'Models chosen by task for optimal usage and consistent quality' },
+  { id: 'kiro/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', provider: 'Kiro', description: 'The Claude Sonnet 4.5 model' },
+  { id: 'kiro/claude-sonnet-4', name: 'Claude Sonnet 4', provider: 'Kiro', description: 'Hybrid reasoning and coding for regular use' },
+  { id: 'kiro/claude-haiku-4.5', name: 'Claude Haiku 4.5', provider: 'Kiro', description: 'The latest Claude Haiku model' },
+  { id: 'kiro/deepseek-3.2', name: 'DeepSeek 3.2', provider: 'Kiro', description: 'Experimental preview of DeepSeek V3.2' },
+  { id: 'kiro/minimax-m2.1', name: 'MiniMax M2.1', provider: 'Kiro', description: 'Experimental preview of MiniMax M2.1' },
+  { id: 'kiro/minimax-m2.5', name: 'MiniMax M2.5', provider: 'Kiro', description: 'Experimental preview of MiniMax M2.5' },
+  { id: 'kiro/qwen3-coder-next', name: 'Qwen3 Coder Next', provider: 'Kiro', description: 'Experimental preview of Qwen3 Coder Next' },
 ]
 
 export const DEFAULT_MODEL_ID = AI_MODELS[0].id

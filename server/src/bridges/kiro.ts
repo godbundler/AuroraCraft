@@ -79,11 +79,16 @@ export class KiroBridge implements BridgeInterface {
       // Spawn Kiro CLI process
       onEvent({ type: 'status', content: 'Sending prompt to Kiro...', timestamp: new Date().toISOString() })
 
+      // Extract kiro model ID by stripping 'kiro/' prefix (e.g. 'kiro/claude-sonnet-4' → 'claude-sonnet-4')
+      const rawModel = task.context?.model ?? ''
+      const kiroModel = rawModel.startsWith('kiro/') ? rawModel.slice(5) : rawModel
+
       const execution = kiroProcessManager.execute(
         directory,
         contextPrompt,
         username,
         controller.signal,
+        kiroModel || undefined,
       )
 
       // Read stdout in real-time
