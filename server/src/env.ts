@@ -9,7 +9,9 @@ const envSchema = z.object({
   SESSION_SECRET: z.string().min(16),
   COOKIE_DOMAIN: z.string().default('localhost'),
   CLIENT_URL: z.string().url().default('http://localhost:5173'),
-  OPENCODE_URL: z.string().default('http://localhost:4096'),
+  OPENCODE_PORT_MIN: z.coerce.number().default(9000),
+  OPENCODE_PORT_MAX: z.coerce.number().default(9999),
+  OPENCODE_IDLE_TIMEOUT: z.coerce.number().default(120000),
 })
 
 export const env = envSchema.parse(process.env)

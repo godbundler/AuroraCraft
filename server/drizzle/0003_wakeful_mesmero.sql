@@ -1,2 +1,1 @@
-ALTER TABLE "agent_messages" ADD COLUMN "metadata" jsonb;--> statement-breakpoint
-ALTER TABLE "agent_sessions" ADD COLUMN "opencode_session_id" varchar(255);
+-- No-op: duplicate of 0002_opencode_bridge

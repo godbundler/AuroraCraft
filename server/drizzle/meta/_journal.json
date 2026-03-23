@@ -50,6 +50,13 @@
       "when": 1774010404226,
       "tag": "0006_elite_captain_marvel",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1774100000000,
+      "tag": "0007_compiler_both",
+      "breakpoints": true
     }
   ]
 }

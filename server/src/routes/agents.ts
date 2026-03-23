@@ -9,6 +9,7 @@ import { agentLogs } from '../db/schema/agent-logs.js'
 import { authMiddleware } from '../middleware/auth.js'
 import { agentExecutor } from '../agents/executor.js'
 import { opencodeBridge } from '../bridges/index.js'
+import { processManager } from '../bridges/opencode-process-manager.js'
 
 const sendMessageSchema = z.object({
   content: z.string().min(1).max(10000),
@@ -171,6 +172,16 @@ export async function agentRoutes(app: FastifyInstance) {
 
         if (!opencodeId || raw.destroyed) return
 
+        // Poll for the OpenCode instance URL (may still be starting)
+        let instanceUrl: string | null = null
+        for (let j = 0; j < 60; j++) {
+          if (raw.destroyed) return
+          instanceUrl = processManager.getInstanceUrl(projectDir)
+          if (instanceUrl) break
+          await new Promise((r) => setTimeout(r, 500))
+        }
+        if (!instanceUrl || raw.destroyed) return
+
         subscribed = true
 
         // If the session is still active, send a synthetic running status BEFORE
@@ -191,6 +202,7 @@ export async function agentRoutes(app: FastifyInstance) {
           projectDir,
           opencodeId,
           (event) => sendSSE(event),
+          instanceUrl,
         )
       }
 
@@ -265,22 +277,38 @@ export async function agentRoutes(app: FastifyInstance) {
       await db.update(agentSessions).set({ opencodeSessionId: null, updatedAt: new Date() }).where(eq(agentSessions.id, sessionId))
     }
 
+    // Start OpenCode instance for this project directory
+    let instanceUrl: string | undefined
+    try {
+      instanceUrl = await processManager.acquire(projectDir)
+    } catch (err) {
+      app.log.warn({ err, sessionId }, 'Failed to start OpenCode instance')
+    }
+
     // Pre-create or resolve the OpenCode session so the SSE endpoint can subscribe immediately
     let opencodeSessionId = modelChanged ? undefined : (session.opencodeSessionId ?? undefined)
-    try {
-      opencodeSessionId = await opencodeBridge.createOrResolveSession(
-        projectDir,
-        project.linkId ?? project.name,
-        opencodeSessionId,
-      )
+    if (instanceUrl) {
+      try {
+        opencodeSessionId = await opencodeBridge.createOrResolveSession(
+          instanceUrl,
+          projectDir,
+          project.linkId ?? project.name,
+          opencodeSessionId,
+        )
 
-      // Save opencodeSessionId early so SSE endpoint can pick it up
-      await db
-        .update(agentSessions)
-        .set({ opencodeSessionId, updatedAt: new Date() })
-        .where(eq(agentSessions.id, sessionId))
-    } catch (err) {
-      app.log.warn({ err, sessionId }, 'Failed to pre-create OpenCode session')
+        // Save opencodeSessionId early so SSE endpoint can pick it up
+        await db
+          .update(agentSessions)
+          .set({ opencodeSessionId, updatedAt: new Date() })
+          .where(eq(agentSessions.id, sessionId))
+      } catch (err) {
+        app.log.warn({ err, sessionId }, 'Failed to pre-create OpenCode session')
+      }
+    }
+
+    // Release the pre-acquired instance (agent executor will re-acquire)
+    if (instanceUrl) {
+      processManager.release(projectDir).catch(() => {})
     }
 
     // Clear stale buffered events from previous messages so SSE subscribers don't replay old 'complete' events

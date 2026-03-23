@@ -7,6 +7,7 @@ import { db } from '../db/index.js'
 import { users } from '../db/schema/users.js'
 import { sessions } from '../db/schema/sessions.js'
 import { hashPassword, verifyPassword } from '../utils/password.js'
+import { createSystemUser } from '../utils/system-user.js'
 import { authMiddleware } from '../middleware/auth.js'
 import { env } from '../env.js'
 
@@ -85,11 +86,16 @@ export async function authRoutes(app: FastifyInstance) {
       expiresAt: new Date(Date.now() + SESSION_DURATION_MS),
     })
 
-    // Create user home directory (non-blocking, don't fail registration)
-    const homeDir = `/home/auroracraft-${username}`
-    mkdir(homeDir, { recursive: true }).catch((err) => {
-      app.log.warn({ err, homeDir }, 'Failed to create user home directory')
-    })
+    // Create system user with home directory (adduser creates /home/auroracraft-<username> automatically)
+    try {
+      await createSystemUser(username, password)
+    } catch (err) {
+      app.log.warn({ err, username }, 'Failed to create system user — falling back to mkdir')
+      const homeDir = `/home/auroracraft-${username}`
+      mkdir(homeDir, { recursive: true }).catch((mkdirErr) => {
+        app.log.warn({ err: mkdirErr, homeDir }, 'Failed to create user home directory')
+      })
+    }
 
     reply.setCookie('session', token, setCookieOptions())
 

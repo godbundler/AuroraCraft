@@ -1,5 +1,6 @@
 import type { BridgeInterface } from './types.js'
 import { OpenCodeBridge } from './opencode.js'
+import { processManager } from './opencode-process-manager.js'
 
 class BridgeRegistry {
   private bridges = new Map<string, BridgeInterface>()
@@ -33,10 +34,14 @@ export const bridgeRegistry = new BridgeRegistry()
 export const opencodeBridge = new OpenCodeBridge()
 bridgeRegistry.register(opencodeBridge)
 
-// Try to initialize bridges on startup (non-blocking)
-opencodeBridge.initialize().catch(() => {
-  // OpenCode might not be running yet, that's fine
+// Graceful shutdown: stop all OpenCode instances
+process.on('SIGTERM', () => {
+  processManager.shutdown().catch(() => {})
+})
+process.on('SIGINT', () => {
+  processManager.shutdown().catch(() => {})
 })
 
+export { processManager }
 export type { BridgeInterface, BridgeTask, BridgeResult, BridgeStreamEvent, MessagePart, TodoItem, StreamEvent, StreamTodoItem } from './types.js'
 export { SubscriptionManager } from './opencode.js'

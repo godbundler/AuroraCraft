@@ -1,5 +1,5 @@
 import type { BridgeInterface, BridgeTask, BridgeResult, BridgeStreamEvent, MessagePart, TodoItem, StreamEvent } from './types.js'
-import { env } from '../env.js'
+import { processManager } from './opencode-process-manager.js'
 
 // ── OpenCode API response types ──────────────────────────────────────
 
@@ -500,12 +500,11 @@ export class SubscriptionManager {
   private connections = new Map<string, SSEConnection>()
   private disconnectTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
-  constructor(private baseUrl: string) {}
-
   subscribe(
     directory: string,
     opencodeSessionId: string,
     callback: (event: StreamEvent) => void,
+    baseUrl: string,
   ): () => void {
     // Cancel any pending disconnect for this directory
     const pendingTimer = this.disconnectTimers.get(directory)
@@ -516,7 +515,7 @@ export class SubscriptionManager {
 
     let conn = this.connections.get(directory)
     if (!conn) {
-      conn = new SSEConnection(this.baseUrl, directory)
+      conn = new SSEConnection(baseUrl, directory)
       this.connections.set(directory, conn)
       conn.connect()
     }
@@ -560,50 +559,29 @@ export class SubscriptionManager {
 
 export class OpenCodeBridge implements BridgeInterface {
   name = 'opencode'
-  private baseUrl: string
   private activeSessions = new Map<string, AbortController>()
-  private available = false
-  private lastAvailabilityCheck = 0
   readonly subscriptionManager: SubscriptionManager
 
   constructor() {
-    this.baseUrl = env.OPENCODE_URL
-    this.subscriptionManager = new SubscriptionManager(this.baseUrl)
+    this.subscriptionManager = new SubscriptionManager()
   }
 
   async initialize(): Promise<void> {
-    await this.checkAvailability()
-  }
-
-  private async checkAvailability(): Promise<boolean> {
-    try {
-      const res = await fetch(`${this.baseUrl}/session`, {
-        method: 'GET',
-        signal: AbortSignal.timeout(3000),
-      })
-      this.available = res.ok
-    } catch {
-      this.available = false
-    }
-    this.lastAvailabilityCheck = Date.now()
-    return this.available
+    // No-op: instances are started on demand by the process manager
   }
 
   isAvailable(): boolean {
-    if (Date.now() - this.lastAvailabilityCheck > 30000) {
-      this.checkAvailability()
-    }
-    return this.available
+    return true // Instances are started on demand
   }
 
   async executeTask(task: BridgeTask): Promise<BridgeResult> {
     return this.streamResponse(task, () => {})
   }
 
-  async createOrResolveSession(directory: string, title?: string, existingId?: string): Promise<string> {
+  async createOrResolveSession(baseUrl: string, directory: string, title?: string, existingId?: string): Promise<string> {
     if (existingId) {
       try {
-        const res = await fetch(`${this.baseUrl}/session/${existingId}`, {
+        const res = await fetch(`${baseUrl}/session/${existingId}`, {
           method: 'GET',
           signal: AbortSignal.timeout(5000),
         })
@@ -611,7 +589,22 @@ export class OpenCodeBridge implements BridgeInterface {
       } catch { /* session not found, create new */ }
     }
 
-    const url = new URL(`${this.baseUrl}/session`)
+    // Try to find existing session by title (project link name)
+    if (title) {
+      try {
+        const res = await fetch(`${baseUrl}/session`, {
+          method: 'GET',
+          signal: AbortSignal.timeout(5000),
+        })
+        if (res.ok) {
+          const sessions = (await res.json()) as OpenCodeSession[]
+          const matching = sessions.find((s) => s.title === title)
+          if (matching) return matching.id
+        }
+      } catch { /* ignore, will create new */ }
+    }
+
+    const url = new URL(`${baseUrl}/session`)
     if (directory) url.searchParams.set('directory', directory)
 
     const body: Record<string, string> = {}
@@ -632,7 +625,7 @@ export class OpenCodeBridge implements BridgeInterface {
     return session.id
   }
 
-  async sendPromptAsync(sessionId: string, prompt: string, model?: string): Promise<void> {
+  async sendPromptAsync(baseUrl: string, sessionId: string, prompt: string, model?: string): Promise<void> {
     const body: Record<string, unknown> = {
       parts: [{ type: 'text', text: prompt }],
     }
@@ -643,7 +636,7 @@ export class OpenCodeBridge implements BridgeInterface {
       body.model = { providerID, modelID }
     }
 
-    const res = await fetch(`${this.baseUrl}/session/${sessionId}/prompt_async`, {
+    const res = await fetch(`${baseUrl}/session/${sessionId}/prompt_async`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -660,21 +653,27 @@ export class OpenCodeBridge implements BridgeInterface {
     const controller = new AbortController()
     this.activeSessions.set(task.sessionId, controller)
 
-    try {
-      const reachable = await this.checkAvailability()
-      if (!reachable) {
-        return {
-          success: false,
-          output: '',
-          error: `OpenCode server is not reachable at ${this.baseUrl}. Make sure OpenCode is running with: opencode serve`,
-        }
-      }
+    const directory = task.context?.projectDirectory ?? '.'
+    let baseUrl: string
 
-      console.log('[OpenCode] Starting stream for session:', task.sessionId, 'project:', task.projectId)
+    try {
+      baseUrl = await processManager.acquire(directory)
+    } catch (err) {
+      this.activeSessions.delete(task.sessionId)
+      const msg = err instanceof Error ? err.message : 'Unknown error'
+      return {
+        success: false,
+        output: '',
+        error: `Failed to start OpenCode instance: ${msg}. Make sure 'opencode' is installed and accessible.`,
+      }
+    }
+
+    try {
+      console.log('[OpenCode] Starting stream for session:', task.sessionId, 'project:', task.projectId, 'url:', baseUrl)
       onEvent({ type: 'status', content: 'Connecting to OpenCode...', timestamp: new Date().toISOString() })
 
-      const directory = task.context?.projectDirectory ?? '.'
       const opencodeSessionId = await this.createOrResolveSession(
+        baseUrl,
         directory,
         task.context?.projectLinkId ?? task.projectId,
         task.context?.opencodeSessionId,
@@ -801,7 +800,7 @@ export class OpenCodeBridge implements BridgeInterface {
               onEvent({ type: 'error', content: event.message, timestamp: new Date().toISOString() })
               break
           }
-        })
+        }, baseUrl)
 
         controller.signal.addEventListener('abort', () => {
           if (!resolved) {
@@ -820,7 +819,7 @@ export class OpenCodeBridge implements BridgeInterface {
       // so pollUntilIdle only considers NEW messages for completion
       let baselineAssistantCount = 0
       try {
-        const msgRes = await fetch(`${this.baseUrl}/session/${opencodeSessionId}/message`, {
+        const msgRes = await fetch(`${baseUrl}/session/${opencodeSessionId}/message`, {
           method: 'GET',
           signal: AbortSignal.timeout(5000),
         })
@@ -834,13 +833,13 @@ export class OpenCodeBridge implements BridgeInterface {
       }
 
       console.log('[OpenCode] Sending prompt to session:', opencodeSessionId, 'baseline msgs:', baselineAssistantCount)
-      await this.sendPromptAsync(opencodeSessionId, contextPrompt, task.context?.model)
+      await this.sendPromptAsync(baseUrl, opencodeSessionId, contextPrompt, task.context?.model)
       console.log('[OpenCode] Prompt sent successfully')
 
       // Start permission polling to detect stuck permissions
       const permAbort = new AbortController()
       controller.signal.addEventListener('abort', () => permAbort.abort(), { once: true })
-      this.pollPermissions(opencodeSessionId, permAbort.signal)
+      this.pollPermissions(baseUrl, opencodeSessionId, permAbort.signal)
 
       // Monitor for stuck operations — warn user if no events for 3 minutes
       const progressChecker = setInterval(() => {
@@ -858,7 +857,7 @@ export class OpenCodeBridge implements BridgeInterface {
       }, 60000)
 
       // Wait for completion via SSE events, with polling fallback
-      const pollFallback = this.pollUntilIdle(opencodeSessionId, controller.signal, baselineAssistantCount)
+      const pollFallback = this.pollUntilIdle(baseUrl, opencodeSessionId, controller.signal, baselineAssistantCount)
       await Promise.race([completionPromise, pollFallback]).catch(() => {})
       clearInterval(progressChecker)
 
@@ -870,7 +869,7 @@ export class OpenCodeBridge implements BridgeInterface {
         this.subscriptionManager.dispatchComplete(directory, opencodeSessionId)
         onEvent({ type: 'error', content: 'Session timed out — the AI agent may still be working in the background. You can send a new message to check.', timestamp: new Date().toISOString() })
         onEvent({ type: 'complete', content: 'Timed out', timestamp: new Date().toISOString() })
-        const partialText = await this.fetchAssistantText(opencodeSessionId)
+        const partialText = await this.fetchAssistantText(baseUrl, opencodeSessionId)
 
         // Flush any remaining pending text into segments
         if (pendingText.trim()) {
@@ -933,7 +932,7 @@ export class OpenCodeBridge implements BridgeInterface {
       onEvent({ type: 'status', content: 'AI agent completed. Processing response...', timestamp: new Date().toISOString() })
 
       // Fetch full messages from OpenCode for accurate persistence
-      const fullText = await this.fetchAssistantText(opencodeSessionId)
+      const fullText = await this.fetchAssistantText(baseUrl, opencodeSessionId)
       const outputText = fullText || collectedText.join('')
       console.log('[OpenCode] Stream complete for session:', opencodeSessionId, 'text length:', outputText.length, 'parts:', orderedRefs.length)
 
@@ -993,6 +992,7 @@ export class OpenCodeBridge implements BridgeInterface {
       return { success: false, output: '', error: `OpenCode bridge error: ${msg}` }
     } finally {
       this.activeSessions.delete(task.sessionId)
+      processManager.release(directory).catch(() => {})
     }
   }
 
@@ -1004,24 +1004,20 @@ export class OpenCodeBridge implements BridgeInterface {
     }
   }
 
-  async deleteSession(opencodeSessionId: string): Promise<void> {
-    try {
-      await fetch(`${this.baseUrl}/session/${opencodeSessionId}`, {
-        method: 'DELETE',
-        signal: AbortSignal.timeout(5000),
-      })
-    } catch { /* best-effort cleanup */ }
+  async deleteSession(_opencodeSessionId: string): Promise<void> {
+    // No-op: with per-project instances, sessions are cleaned up when the process stops.
+    // The process manager's idle timeout handles cleanup automatically.
   }
 
   // ── Private helpers ──────────────────────────────────────────────
 
-  private async pollPermissions(sessionId: string, signal: AbortSignal): Promise<void> {
+  private async pollPermissions(baseUrl: string, sessionId: string, signal: AbortSignal): Promise<void> {
     // Diagnostic: periodically check for pending permissions that may block tool execution
     while (!signal.aborted) {
       await new Promise((r) => setTimeout(r, 10000))
       if (signal.aborted) return
       try {
-        const res = await fetch(`${this.baseUrl}/permission`, {
+        const res = await fetch(`${baseUrl}/permission`, {
           method: 'GET',
           signal: AbortSignal.timeout(5000),
         })
@@ -1037,7 +1033,7 @@ export class OpenCodeBridge implements BridgeInterface {
     }
   }
 
-  private async pollUntilIdle(sessionId: string, signal: AbortSignal, baselineAssistantCount: number): Promise<void> {
+  private async pollUntilIdle(baseUrl: string, sessionId: string, signal: AbortSignal, baselineAssistantCount: number): Promise<void> {
     // Initial delay before polling starts
     await new Promise((r) => setTimeout(r, 5000))
 
@@ -1046,7 +1042,7 @@ export class OpenCodeBridge implements BridgeInterface {
 
     while (!signal.aborted) {
       try {
-        const res = await fetch(`${this.baseUrl}/session/${sessionId}/message`, {
+        const res = await fetch(`${baseUrl}/session/${sessionId}/message`, {
           method: 'GET',
           signal: AbortSignal.timeout(5000),
         })
@@ -1077,9 +1073,9 @@ export class OpenCodeBridge implements BridgeInterface {
     }
   }
 
-  private async fetchAssistantText(sessionId: string): Promise<string> {
+  private async fetchAssistantText(baseUrl: string, sessionId: string): Promise<string> {
     try {
-      const res = await fetch(`${this.baseUrl}/session/${sessionId}/message`, {
+      const res = await fetch(`${baseUrl}/session/${sessionId}/message`, {
         method: 'GET',
         signal: AbortSignal.timeout(10000),
       })
@@ -1125,7 +1121,7 @@ export class OpenCodeBridge implements BridgeInterface {
     if (ctx.projectDirectory) {
       lines.push('')
       lines.push(`Working Directory: ${ctx.projectDirectory}`)
-      lines.push(`IMPORTANT: Your current working directory may NOT be the project directory. You MUST create all files using absolute paths under ${ctx.projectDirectory}/. For example, to create build.gradle, write to ${ctx.projectDirectory}/build.gradle. Do NOT create files in any other location.`)
+      lines.push(`Your current working directory IS the project directory. You can create files using relative paths. All files should be created within this directory.`)
     }
     lines.push('')
     lines.push('RESTRICTIONS:')

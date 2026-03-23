@@ -3,6 +3,7 @@ import fastifyStatic from '@fastify/static'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { env } from './env.js'
+import { processManager } from './bridges/opencode-process-manager.js'
 import corsPlugin from './plugins/cors.js'
 import cookiePlugin from './plugins/cookie.js'
 import websocketPlugin from './plugins/websocket.js'
@@ -51,6 +52,11 @@ app.setNotFoundHandler(async (request, reply) => {
     return reply.status(404).send({ message: 'Not found', statusCode: 404 })
   }
   return reply.sendFile('index.html')
+})
+
+// Graceful shutdown: stop all OpenCode instances
+app.addHook('onClose', async () => {
+  await processManager.shutdown()
 })
 
 // Start
