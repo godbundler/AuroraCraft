@@ -17,6 +17,9 @@ module.exports = {
       max_memory_restart: '512M',
       wait_ready: false,
       restart_delay: 3000,
+      kill_timeout: 10000,
+      max_restarts: 10,
+      min_uptime: 5000,
       env: {
         NODE_ENV: 'production',
       },

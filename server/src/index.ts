@@ -67,3 +67,16 @@ try {
   app.log.error(err)
   process.exit(1)
 }
+
+// Graceful shutdown: release the port so PM2 restarts don't hit EADDRINUSE
+const shutdown = async (signal: string) => {
+  app.log.info(`Received ${signal}, shutting down gracefully...`)
+  try {
+    await app.close()
+  } catch (err) {
+    app.log.error(err)
+  }
+  process.exit(0)
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'))
+process.on('SIGINT', () => shutdown('SIGINT'))

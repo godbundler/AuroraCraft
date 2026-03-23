@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'child_process'
+import { mkdir } from 'fs/promises'
 import { env } from '../env.js'
 
 interface OpenCodeInstance {
@@ -112,10 +113,11 @@ export class OpenCodeProcessManager {
 
     console.log(`[ProcessManager] Starting OpenCode for ${directory} on port ${port}`)
 
-    const child = spawn('opencode', ['serve', '--port', String(port), directory], {
+    await mkdir(directory, { recursive: true })
+
+    const child = spawn('opencode', ['serve', '--port', String(port)], {
       cwd: directory,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, HOME: directory },
       detached: false,
     })
 

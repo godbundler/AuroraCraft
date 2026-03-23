@@ -1,6 +1,8 @@
 import type { BridgeInterface, BridgeTask, BridgeResult, BridgeStreamEvent, MessagePart, TodoItem, StreamEvent } from './types.js'
 import { processManager } from './opencode-process-manager.js'
 
+// No default model override — let OpenCode use its configured default
+
 // ── OpenCode API response types ──────────────────────────────────────
 
 interface OpenCodeSession {
@@ -1112,25 +1114,14 @@ export class OpenCodeBridge implements BridgeInterface {
     if (!ctx?.projectName) return task.prompt
 
     const lines: string[] = []
-    lines.push('[AuroraCraft Project Context]')
-    lines.push(`Project: ${ctx.projectName}`)
-    if (ctx.software) lines.push(`Server Software: ${ctx.software}`)
+    lines.push(`[Project: ${ctx.projectName}]`)
+    if (ctx.software) lines.push(`Software: ${ctx.software}`)
     if (ctx.language) lines.push(`Language: ${ctx.language}`)
-    if (ctx.compiler) lines.push(`Build Tool: ${ctx.compiler}`)
-    if (ctx.javaVersion) lines.push(`Java Version: ${ctx.javaVersion}`)
-    if (ctx.projectDirectory) {
-      lines.push('')
-      lines.push(`Working Directory: ${ctx.projectDirectory}`)
-      lines.push(`Your current working directory IS the project directory. You can create files using relative paths. All files should be created within this directory.`)
-    }
+    if (ctx.compiler) lines.push(`Build: ${ctx.compiler}`)
+    if (ctx.javaVersion) lines.push(`Java: ${ctx.javaVersion}`)
+    if (ctx.projectDirectory) lines.push(`Dir: ${ctx.projectDirectory}`)
     lines.push('')
-    lines.push('RESTRICTIONS:')
-    lines.push('- Do NOT execute build commands (mvn, gradle, javac, make)')
-    lines.push('- Do NOT execute destructive or long-running terminal commands')
-    lines.push('- You may only use terminal for file/folder finding and essential read operations')
-    lines.push('- Focus on writing clean, well-structured Minecraft plugin code')
-    lines.push('')
-    lines.push(`User Request: ${task.prompt}`)
+    lines.push(`Request: ${task.prompt}`)
 
     return lines.join('\n')
   }

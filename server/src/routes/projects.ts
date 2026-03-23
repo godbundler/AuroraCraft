@@ -210,11 +210,13 @@ export async function projectRoutes(app: FastifyInstance) {
       })
       .returning()
 
-    // Create project directory (non-blocking)
+    // Create project directory
     const projectDir = `/home/auroracraft-${username}/${linkId}`
-    mkdir(projectDir, { recursive: true }).catch((err) => {
+    try {
+      await mkdir(projectDir, { recursive: true })
+    } catch (err) {
       app.log.warn({ err, projectDir }, 'Failed to create project directory')
-    })
+    }
 
     return reply.status(201).send(project)
   })

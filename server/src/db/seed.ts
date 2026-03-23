@@ -3,6 +3,7 @@ import postgres from 'postgres'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import { users } from './schema/users.js'
 import { hashPassword } from '../utils/password.js'
+import { createSystemUser } from '../utils/system-user.js'
 import { eq } from 'drizzle-orm'
 
 async function seed() {
@@ -34,6 +35,14 @@ async function seed() {
       role: 'admin',
     })
     console.log('Admin user created (username: admin, password: admin123)')
+
+    // Create corresponding system user
+    try {
+      await createSystemUser('admin', 'admin123')
+      console.log('Admin system user created')
+    } catch (err) {
+      console.warn('Failed to create admin system user (may need root/sudo):', err instanceof Error ? err.message : err)
+    }
   }
 
   await client.end()

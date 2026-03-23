@@ -24,7 +24,8 @@ export async function createSystemUser(username: string, password: string): Prom
 
   console.log(`[SystemUser] Creating system user: ${systemUsername}`)
 
-  await execFileAsync('adduser', [
+  await execFileAsync('sudo', [
+    'adduser',
     '--disabled-password',
     '--gecos', '',
     systemUsername,
@@ -34,7 +35,7 @@ export async function createSystemUser(username: string, password: string): Prom
     await setSystemUserPassword(systemUsername, password)
   } catch (err) {
     // Rollback: remove the user if password setting failed
-    await execFileAsync('userdel', ['-r', systemUsername]).catch(() => {})
+    await execFileAsync('sudo', ['userdel', '-r', systemUsername]).catch(() => {})
     throw err
   }
 
@@ -47,7 +48,7 @@ async function setSystemUserPassword(systemUsername: string, password: string): 
   }
 
   return new Promise<void>((resolve, reject) => {
-    const child = spawn('chpasswd', [], { stdio: ['pipe', 'ignore', 'pipe'] })
+    const child = spawn('sudo', ['chpasswd'], { stdio: ['pipe', 'ignore', 'pipe'] })
 
     let stderr = ''
     child.stderr.on('data', (chunk: Buffer) => {
