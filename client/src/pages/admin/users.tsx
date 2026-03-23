@@ -1,5 +1,57 @@
-import { Loader2 } from 'lucide-react'
+import { useState } from 'react'
+import { Loader2, CheckCircle2, XCircle, Terminal } from 'lucide-react'
 import { useAdminUsers } from '@/hooks/use-admin'
+import { api } from '@/lib/api'
+import type { KiroAuthStatus } from '@/types'
+
+function KiroAuthButton({ userId }: { userId: string }) {
+  const [status, setStatus] = useState<KiroAuthStatus | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  const checkStatus = async () => {
+    setLoading(true)
+    try {
+      const result = await api.get<KiroAuthStatus>(`/admin/kiro/status/${userId}`)
+      setStatus(result)
+    } catch {
+      setStatus(null)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  if (loading) {
+    return <Loader2 className="h-3.5 w-3.5 animate-spin text-text-dim" />
+  }
+
+  if (status) {
+    return (
+      <div className="flex items-center gap-1.5">
+        {status.authenticated ? (
+          <span className="inline-flex items-center gap-1 text-xs text-success">
+            <CheckCircle2 className="h-3 w-3" />
+            Kiro Auth
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 text-xs text-warning">
+            <XCircle className="h-3 w-3" />
+            No Kiro
+          </span>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <button
+      onClick={checkStatus}
+      className="inline-flex items-center gap-1 rounded-md bg-surface-hover px-2 py-1 text-[11px] text-text-muted transition-colors hover:bg-primary/10 hover:text-primary"
+    >
+      <Terminal className="h-3 w-3" />
+      Check Kiro
+    </button>
+  )
+}
 
 export default function AdminUsersPage() {
   const { users, isLoading } = useAdminUsers()
@@ -26,6 +78,7 @@ export default function AdminUsersPage() {
                 <th className="px-4 py-3 text-left font-medium text-text-muted">Email</th>
                 <th className="px-4 py-3 text-left font-medium text-text-muted">Role</th>
                 <th className="px-4 py-3 text-left font-medium text-text-muted">Joined</th>
+                <th className="px-4 py-3 text-left font-medium text-text-muted">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -44,6 +97,9 @@ export default function AdminUsersPage() {
                   </td>
                   <td className="px-4 py-3 text-text-dim">
                     {new Date(user.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
+                  </td>
+                  <td className="px-4 py-3">
+                    <KiroAuthButton userId={user.id} />
                   </td>
                 </tr>
               ))}

@@ -23,8 +23,8 @@ export function useAgentSessions(projectId: string) {
   })
 
   const createSessionMutation = useMutation({
-    mutationFn: () =>
-      api.post<AgentSession>(`/projects/${projectId}/agent/sessions`),
+    mutationFn: (body?: { bridge?: 'opencode' | 'kiro' }) =>
+      api.post<AgentSession>(`/projects/${projectId}/agent/sessions`, body ?? {}),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'agent', 'sessions'] })
     },
@@ -70,8 +70,8 @@ export function useAgentSession(projectId: string, sessionId: string) {
   }, [queryClient, projectId, sessionId, refetch])
 
   const sendMessageMutation = useMutation({
-    mutationFn: ({ content, model }: { content: string; model?: string }) =>
-      api.post<AgentMessage>(`/projects/${projectId}/agent/sessions/${sessionId}/messages`, { content, model }),
+    mutationFn: ({ content, model, bridge }: { content: string; model?: string; bridge?: 'opencode' | 'kiro' }) =>
+      api.post<AgentMessage>(`/projects/${projectId}/agent/sessions/${sessionId}/messages`, { content, model, bridge }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'agent', 'sessions', sessionId] })
     },

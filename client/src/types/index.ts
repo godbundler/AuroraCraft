@@ -83,6 +83,8 @@ export interface AgentSession {
   projectId: string
   status: AgentStatus
   opencodeSessionId?: string | null
+  bridge?: 'opencode' | 'kiro'
+  kiroSessionId?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -124,6 +126,16 @@ export interface AgentLog {
   createdAt: string
 }
 
+export interface KiroAuthStatus {
+  userId: string
+  username: string
+  systemUser: string
+  systemUserExists: boolean
+  authenticated: boolean
+  configDir: string
+  instructions?: string
+}
+
 export interface AdminStats {
   totalUsers: number
   totalProjects: number
@@ -154,6 +166,7 @@ export const AI_MODELS: AIModel[] = [
   { id: 'opencode/mimo-v2-pro-free', name: 'MiMo V2 Pro', provider: 'Xiaomi', description: 'Free pro model optimized for code generation' },
   { id: 'opencode/mimo-v2-omni-free', name: 'MiMo V2 Omni', provider: 'Xiaomi', description: 'Free omni model with broad coding capabilities' },
   { id: 'opencode/nemotron-3-super-free', name: 'Nemotron 3 Super', provider: 'NVIDIA', description: 'Free NVIDIA model with strong reasoning' },
+  { id: 'kiro/default', name: 'Kiro CLI', provider: 'Amazon/AWS', description: 'AI coding agent via Kiro CLI' },
 ]
 
 export const DEFAULT_MODEL_ID = AI_MODELS[0].id

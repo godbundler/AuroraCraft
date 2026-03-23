@@ -3,6 +3,7 @@ import { AI_MODELS } from '@/types'
 
 const bridges = [
   { name: 'OpenCode', status: 'active' as const, description: 'Open-source AI coding agent with multi-model support' },
+  { name: 'Kiro CLI', status: 'active' as const, description: 'Amazon AWS AI coding agent with CLI support' },
   { name: 'Codex', status: 'coming_soon' as const, description: "OpenAI's code generation platform" },
 ]
 

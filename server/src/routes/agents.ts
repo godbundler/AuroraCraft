@@ -8,12 +8,17 @@ import { agentMessages } from '../db/schema/agent-messages.js'
 import { agentLogs } from '../db/schema/agent-logs.js'
 import { authMiddleware } from '../middleware/auth.js'
 import { agentExecutor } from '../agents/executor.js'
-import { opencodeBridge } from '../bridges/index.js'
+import { opencodeBridge, sessionEventBus } from '../bridges/index.js'
 import { processManager } from '../bridges/opencode-process-manager.js'
+
+const createSessionSchema = z.object({
+  bridge: z.enum(['opencode', 'kiro']).optional(),
+})
 
 const sendMessageSchema = z.object({
   content: z.string().min(1).max(10000),
   model: z.string().max(100).optional(),
+  bridge: z.enum(['opencode', 'kiro']).optional(),
 })
 
 const sessionModelTracker = new Map<string, string>()
@@ -60,9 +65,12 @@ export async function agentRoutes(app: FastifyInstance) {
       return reply.status(404).send({ message: 'Project not found', statusCode: 404 })
     }
 
+    const parsed = createSessionSchema.safeParse(request.body ?? {})
+    const bridge = parsed.success ? (parsed.data.bridge ?? 'opencode') : 'opencode'
+
     const [session] = await db
       .insert(agentSessions)
-      .values({ projectId })
+      .values({ projectId, bridge })
       .returning()
 
     return reply.status(201).send(session)
@@ -144,73 +152,79 @@ export async function agentRoutes(app: FastifyInstance) {
     let unsubscribe: (() => void) | null = null
     let subscribed = false
 
-    const trySubscribe = () => {
-      if (subscribed) return
+    if (session.bridge === 'kiro') {
+      // Kiro uses the bridge-agnostic session event bus — no process URL needed
+      subscribed = true
 
-      // Find the opencodeSessionId (poll DB if needed)
-      const doSubscribe = async () => {
-        let opencodeId = session.opencodeSessionId
-
-        // Poll for up to 30 seconds if no opencodeSessionId yet
-        if (!opencodeId) {
-          for (let i = 0; i < 60; i++) {
-            if (raw.destroyed) return
-            await new Promise((r) => setTimeout(r, 500))
-
-            const [refreshed] = await db
-              .select({ opencodeSessionId: agentSessions.opencodeSessionId })
-              .from(agentSessions)
-              .where(eq(agentSessions.id, sessionId))
-              .limit(1)
-
-            if (refreshed?.opencodeSessionId) {
-              opencodeId = refreshed.opencodeSessionId
-              break
-            }
-          }
-        }
-
-        if (!opencodeId || raw.destroyed) return
-
-        // Poll for the OpenCode instance URL (may still be starting)
-        let instanceUrl: string | null = null
-        for (let j = 0; j < 60; j++) {
-          if (raw.destroyed) return
-          instanceUrl = processManager.getInstanceUrl(projectDir)
-          if (instanceUrl) break
-          await new Promise((r) => setTimeout(r, 500))
-        }
-        if (!instanceUrl || raw.destroyed) return
-
-        subscribed = true
-
-        // If the session is still active, send a synthetic running status BEFORE
-        // subscribing (which replays buffered events). This ensures the client sets
-        // activeStream=true before processing any replayed file-op events.
-        // Guards against the buffer overflowing and losing the original status event.
-        const [current] = await db
-          .select({ status: agentSessions.status })
-          .from(agentSessions)
-          .where(eq(agentSessions.id, sessionId))
-          .limit(1)
-
-        if (current && (current.status === 'running' || current.status === 'idle')) {
-          sendSSE({ type: 'status', status: 'running' })
-        }
-
-        unsubscribe = opencodeBridge.subscriptionManager.subscribe(
-          projectDir,
-          opencodeId,
-          (event) => sendSSE(event),
-          instanceUrl,
-        )
+      if (session.status === 'running' || session.status === 'idle') {
+        sendSSE({ type: 'status', status: 'running' })
       }
 
-      doSubscribe().catch(() => {})
-    }
+      unsubscribe = sessionEventBus.subscribe(sessionId, (event) => sendSSE(event))
+    } else {
+      // OpenCode: subscribe via the OpenCode subscription manager
+      const trySubscribe = () => {
+        if (subscribed) return
 
-    // Start trying to subscribe
-    trySubscribe()
+        const doSubscribe = async () => {
+          let opencodeId = session.opencodeSessionId
+
+          // Poll for up to 30 seconds if no opencodeSessionId yet
+          if (!opencodeId) {
+            for (let i = 0; i < 60; i++) {
+              if (raw.destroyed) return
+              await new Promise((r) => setTimeout(r, 500))
+
+              const [refreshed] = await db
+                .select({ opencodeSessionId: agentSessions.opencodeSessionId })
+                .from(agentSessions)
+                .where(eq(agentSessions.id, sessionId))
+                .limit(1)
+
+              if (refreshed?.opencodeSessionId) {
+                opencodeId = refreshed.opencodeSessionId
+                break
+              }
+            }
+          }
+
+          if (!opencodeId || raw.destroyed) return
+
+          // Poll for the OpenCode instance URL (may still be starting)
+          let instanceUrl: string | null = null
+          for (let j = 0; j < 60; j++) {
+            if (raw.destroyed) return
+            instanceUrl = processManager.getInstanceUrl(projectDir)
+            if (instanceUrl) break
+            await new Promise((r) => setTimeout(r, 500))
+          }
+          if (!instanceUrl || raw.destroyed) return
+
+          subscribed = true
+
+          const [current] = await db
+            .select({ status: agentSessions.status })
+            .from(agentSessions)
+            .where(eq(agentSessions.id, sessionId))
+            .limit(1)
+
+          if (current && (current.status === 'running' || current.status === 'idle')) {
+            sendSSE({ type: 'status', status: 'running' })
+          }
+
+          unsubscribe = opencodeBridge.subscriptionManager.subscribe(
+            projectDir,
+            opencodeId,
+            (event) => sendSSE(event),
+            instanceUrl,
+          )
+        }
+
+        doSubscribe().catch(() => {})
+      }
+
+      trySubscribe()
+    }
 
     // Send initial connection event
     sendSSE({ type: 'status', status: 'connected' })
@@ -262,58 +276,66 @@ export async function agentRoutes(app: FastifyInstance) {
       })
       .returning()
 
-    // Resolve project directory
+    // Resolve project directory and bridge
     const username = request.user!.username
     const projectDir = getProjectDirectory(username, project.linkId)
+    const bridgeName = parsed.data.bridge || session.bridge || 'opencode'
 
-    // Track model per session — force new OpenCode session when model changes
-    const requestedModel = parsed.data.model ?? ''
-    const lastModel = sessionModelTracker.get(sessionId)
-    const modelChanged = !!(requestedModel && lastModel && requestedModel !== lastModel)
-    if (requestedModel) sessionModelTracker.set(sessionId, requestedModel)
+    let opencodeSessionId: string | undefined
 
-    if (modelChanged && session.opencodeSessionId) {
-      app.log.info({ sessionId, from: lastModel, to: requestedModel }, 'Model changed — creating new OpenCode session')
-      await db.update(agentSessions).set({ opencodeSessionId: null, updatedAt: new Date() }).where(eq(agentSessions.id, sessionId))
-    }
+    if (bridgeName === 'opencode') {
+      // Track model per session — force new OpenCode session when model changes
+      const requestedModel = parsed.data.model ?? ''
+      const lastModel = sessionModelTracker.get(sessionId)
+      const modelChanged = !!(requestedModel && lastModel && requestedModel !== lastModel)
+      if (requestedModel) sessionModelTracker.set(sessionId, requestedModel)
 
-    // Start OpenCode instance for this project directory
-    let instanceUrl: string | undefined
-    try {
-      instanceUrl = await processManager.acquire(projectDir)
-    } catch (err) {
-      app.log.warn({ err, sessionId }, 'Failed to start OpenCode instance')
-    }
-
-    // Pre-create or resolve the OpenCode session so the SSE endpoint can subscribe immediately
-    let opencodeSessionId = modelChanged ? undefined : (session.opencodeSessionId ?? undefined)
-    if (instanceUrl) {
-      try {
-        opencodeSessionId = await opencodeBridge.createOrResolveSession(
-          instanceUrl,
-          projectDir,
-          project.linkId ?? project.name,
-          opencodeSessionId,
-        )
-
-        // Save opencodeSessionId early so SSE endpoint can pick it up
-        await db
-          .update(agentSessions)
-          .set({ opencodeSessionId, updatedAt: new Date() })
-          .where(eq(agentSessions.id, sessionId))
-      } catch (err) {
-        app.log.warn({ err, sessionId }, 'Failed to pre-create OpenCode session')
+      if (modelChanged && session.opencodeSessionId) {
+        app.log.info({ sessionId, from: lastModel, to: requestedModel }, 'Model changed — creating new OpenCode session')
+        await db.update(agentSessions).set({ opencodeSessionId: null, updatedAt: new Date() }).where(eq(agentSessions.id, sessionId))
       }
-    }
 
-    // Release the pre-acquired instance (agent executor will re-acquire)
-    if (instanceUrl) {
-      processManager.release(projectDir).catch(() => {})
-    }
+      // Start OpenCode instance for this project directory
+      let instanceUrl: string | undefined
+      try {
+        instanceUrl = await processManager.acquire(projectDir)
+      } catch (err) {
+        app.log.warn({ err, sessionId }, 'Failed to start OpenCode instance')
+      }
 
-    // Clear stale buffered events from previous messages so SSE subscribers don't replay old 'complete' events
-    if (opencodeSessionId) {
-      opencodeBridge.subscriptionManager.clearBuffer(projectDir, opencodeSessionId)
+      // Pre-create or resolve the OpenCode session so the SSE endpoint can subscribe immediately
+      opencodeSessionId = modelChanged ? undefined : (session.opencodeSessionId ?? undefined)
+      if (instanceUrl) {
+        try {
+          opencodeSessionId = await opencodeBridge.createOrResolveSession(
+            instanceUrl,
+            projectDir,
+            project.linkId ?? project.name,
+            opencodeSessionId,
+          )
+
+          // Save opencodeSessionId early so SSE endpoint can pick it up
+          await db
+            .update(agentSessions)
+            .set({ opencodeSessionId, updatedAt: new Date() })
+            .where(eq(agentSessions.id, sessionId))
+        } catch (err) {
+          app.log.warn({ err, sessionId }, 'Failed to pre-create OpenCode session')
+        }
+      }
+
+      // Release the pre-acquired instance (agent executor will re-acquire)
+      if (instanceUrl) {
+        processManager.release(projectDir).catch(() => {})
+      }
+
+      // Clear stale buffered events from previous messages
+      if (opencodeSessionId) {
+        opencodeBridge.subscriptionManager.clearBuffer(projectDir, opencodeSessionId)
+      }
+    } else if (bridgeName === 'kiro') {
+      // Clear stale buffered events for Kiro sessions
+      sessionEventBus.clearBuffer(sessionId)
     }
 
     // Fire-and-forget: launch the AI agent executor asynchronously
@@ -322,9 +344,11 @@ export async function agentRoutes(app: FastifyInstance) {
         sessionId,
         projectId,
         prompt: parsed.data.content,
-        bridgeName: 'opencode',
+        bridgeName,
         model: parsed.data.model,
-        opencodeSessionId,
+        opencodeSessionId: bridgeName === 'opencode' ? opencodeSessionId : undefined,
+        kiroSessionId: bridgeName === 'kiro' ? (session.kiroSessionId ?? undefined) : undefined,
+        username,
         projectLinkId: project.linkId ?? undefined,
         projectName: project.name,
         software: project.software,

@@ -36,7 +36,9 @@ export class AgentExecutor {
           prompt: context.prompt,
           context: {
             opencodeSessionId: context.opencodeSessionId,
+            kiroSessionId: context.kiroSessionId,
             model: context.model,
+            username: context.username,
             projectLinkId: context.projectLinkId,
             projectName: context.projectName,
             software: context.software,
@@ -97,22 +99,16 @@ export class AgentExecutor {
         metadata: result.metadata?.parts ? { parts: result.metadata.parts } : undefined,
       })
 
-      // Store the OpenCode session ID for future message reuse
-      if (result.metadata?.opencodeSessionId) {
-        await db
-          .update(agentSessions)
-          .set({
-            status: 'completed',
-            opencodeSessionId: result.metadata.opencodeSessionId,
-            updatedAt: new Date(),
-          })
-          .where(eq(agentSessions.id, context.sessionId))
-      } else {
-        await db
-          .update(agentSessions)
-          .set({ status: 'completed', updatedAt: new Date() })
-          .where(eq(agentSessions.id, context.sessionId))
-      }
+      // Store bridge session IDs for future message reuse
+      await db
+        .update(agentSessions)
+        .set({
+          status: 'completed',
+          ...(result.metadata?.opencodeSessionId ? { opencodeSessionId: result.metadata.opencodeSessionId } : {}),
+          ...(result.metadata?.kiroSessionId ? { kiroSessionId: result.metadata.kiroSessionId } : {}),
+          updatedAt: new Date(),
+        })
+        .where(eq(agentSessions.id, context.sessionId))
 
       await this.addLog(context.sessionId, 'status', 'Execution completed')
 

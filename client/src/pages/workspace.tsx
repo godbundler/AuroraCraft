@@ -600,6 +600,10 @@ function ModelSelector({ selectedModel, onModelChange, disabled }: {
 
 // ── Chat components ──────────────────────────────────────────────────
 
+function getBridgeFromModel(modelId: string): 'opencode' | 'kiro' {
+  return modelId.startsWith('kiro/') ? 'kiro' : 'opencode'
+}
+
 function ChatPanel({ projectId, onRefreshFiles, onFileSelect }: { projectId: string; onRefreshFiles?: () => void; onFileSelect?: (path: string) => void }) {
   const { sessions, isLoading: sessionsLoading, createSession } = useAgentSessions(projectId)
 
@@ -711,7 +715,7 @@ const ChatInput = memo(function ChatInput({ onSend, disabled, isRunning, isCance
 
 function ChatEmptyState({ onSessionCreated, createSession, selectedModel, onModelChange }: {
   onSessionCreated: (id: string, message: string) => void
-  createSession: () => Promise<{ id: string }>
+  createSession: (body?: { bridge?: 'opencode' | 'kiro' }) => Promise<{ id: string }>
   selectedModel: string
   onModelChange: (modelId: string) => void
 }) {
@@ -733,7 +737,8 @@ function ChatEmptyState({ onSessionCreated, createSession, selectedModel, onMode
       <ChatInput
         onSend={(msg) => {
           setIsCreating(true)
-          createSession().then((session) => onSessionCreated(session.id, msg)).catch(() => setIsCreating(false))
+          const bridge = getBridgeFromModel(selectedModel)
+          createSession({ bridge }).then((session) => onSessionCreated(session.id, msg)).catch(() => setIsCreating(false))
         }}
         disabled={isCreating}
         selectedModel={selectedModel}
@@ -770,7 +775,7 @@ function ChatSession({ projectId, sessionId, pendingMessage, onPendingMessageSen
       resetStream()
       streamStartMessageCountRef.current = messages.length
       completionHandledRef.current = false
-      void sendMessage({ content: pendingMessage, model: selectedModel }).catch(() => setAwaitingStream(false))
+      void sendMessage({ content: pendingMessage, model: selectedModel, bridge: getBridgeFromModel(selectedModel) }).catch(() => setAwaitingStream(false))
       onPendingMessageSent?.()
     }
   }, [pendingMessage, isConnected, sendMessage, onPendingMessageSent, selectedModel, resetStream])
@@ -785,7 +790,7 @@ function ChatSession({ projectId, sessionId, pendingMessage, onPendingMessageSen
         resetStream()
         streamStartMessageCountRef.current = messages.length
         completionHandledRef.current = false
-        void sendMessage({ content: pendingMessage, model: selectedModel }).catch(() => setAwaitingStream(false))
+        void sendMessage({ content: pendingMessage, model: selectedModel, bridge: getBridgeFromModel(selectedModel) }).catch(() => setAwaitingStream(false))
         onPendingMessageSent?.()
       }
     }, 5000)
@@ -860,7 +865,7 @@ function ChatSession({ projectId, sessionId, pendingMessage, onPendingMessageSen
     prevFileChangesRef.current = 0
     prevCompletedOpsRef.current = 0
     try {
-      await sendMessage({ content: message, model: selectedModel })
+      await sendMessage({ content: message, model: selectedModel, bridge: getBridgeFromModel(selectedModel) })
     } catch {
       setAwaitingStream(false)
     }

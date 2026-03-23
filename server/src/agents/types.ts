@@ -9,6 +9,8 @@ export interface AgentExecutionContext {
   bridgeName: string
   model?: string
   opencodeSessionId?: string
+  kiroSessionId?: string
+  username?: string
   projectLinkId?: string
   projectName?: string
   software?: string
@@ -25,6 +27,7 @@ export interface AgentExecutionResult {
   error?: string
   metadata?: {
     opencodeSessionId?: string
+    kiroSessionId?: string
     parts?: MessagePart[]
   }
 }

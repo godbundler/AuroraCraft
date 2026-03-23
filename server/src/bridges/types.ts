@@ -4,6 +4,7 @@ export interface BridgeTask {
   prompt: string
   context?: {
     opencodeSessionId?: string
+    kiroSessionId?: string
     model?: string
     projectLinkId?: string
     projectName?: string
@@ -12,6 +13,8 @@ export interface BridgeTask {
     compiler?: string
     javaVersion?: string
     projectDirectory?: string
+    userHomeDir?: string
+    username?: string
   }
 }
 
@@ -41,6 +44,7 @@ export interface BridgeResult {
   error?: string
   metadata?: {
     opencodeSessionId?: string
+    kiroSessionId?: string
     parts?: MessagePart[]
   }
 }
