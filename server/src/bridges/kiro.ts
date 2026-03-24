@@ -5,6 +5,84 @@ import { parseKiroOutput, extractTextContent, stripAnsi } from './kiro-output-pa
 import { sessionEventBus } from './session-event-bus.js'
 import { execSync } from 'child_process'
 
+// ── Stream filter ────────────────────────────────────────────────────
+
+class KiroStreamFilter {
+  private buffer = ''
+  private inResponseBlock = false
+
+  processChunk(chunk: string): string {
+    this.buffer += chunk
+    const lines = this.buffer.split('\n')
+    this.buffer = lines.pop() || ''
+
+    let output = ''
+    for (const line of lines) {
+      const wasInResponse = this.inResponseBlock
+      const result = this.classifyLine(line)
+      if (result !== null) {
+        if (this.inResponseBlock) {
+          // The `script` PTY wrapper outputs each LLM token on its own line.
+          // Empty lines = word boundaries (spaces), non-empty = token parts.
+          if (!wasInResponse && output) output += '\n\n'
+          output += result === '' ? ' ' : result
+        } else {
+          output += result + '\n'
+        }
+      }
+    }
+    return output
+  }
+
+  flush(): string {
+    const line = this.buffer
+    this.buffer = ''
+    if (!line) return ''
+    const result = this.classifyLine(line)
+    if (result === null) return ''
+    return this.inResponseBlock ? (result === '' ? ' ' : result) : result
+  }
+
+  private classifyLine(line: string): string | null {
+    const trimmed = line.trim()
+
+    if (!trimmed) {
+      return this.inResponseBlock ? '' : null
+    }
+
+    if (trimmed.startsWith('> ') || trimmed === '>') {
+      this.inResponseBlock = true
+      return trimmed.length > 2 ? trimmed.slice(2) : ''
+    }
+
+    if (this.isSuppressed(trimmed)) {
+      this.inResponseBlock = false
+      return null
+    }
+
+    if (this.inResponseBlock) {
+      return line
+    }
+
+    return null
+  }
+
+  private isSuppressed(line: string): boolean {
+    if (line.includes('tools are now trusted')) return true
+    if (/^I.ll create the following file:/.test(line)) return true
+    if (/^\+\s+\d+:/.test(line)) return true
+    if (line.startsWith('✓')) return true
+    if (/^Reading (directory|file):/.test(line)) return true
+    if (line.startsWith('Creating:')) return true
+    if (line.includes('- Completed in')) return true
+    if (line.includes('▸ Credits:')) return true
+    if (line.includes('(using tool:')) return true
+    if (line.includes('Agents can sometimes do unexpected')) return true
+    if (line.includes('Learn more at https://kiro')) return true
+    return false
+  }
+}
+
 // ── Kiro Bridge ──────────────────────────────────────────────────────
 
 export class KiroBridge implements BridgeInterface {
@@ -67,6 +145,7 @@ export class KiroBridge implements BridgeInterface {
           tool: 'kiro-cli',
         }
         sessionEventBus.emit(task.sessionId, streamEvent)
+        sessionEventBus.emit(task.sessionId, { type: 'file-change', file: event.path })
         onEvent({
           type: 'file-op',
           content: `${event.type}d ${event.path}`,
@@ -95,6 +174,7 @@ export class KiroBridge implements BridgeInterface {
       const collectedOutput: string[] = []
       const reader = execution.stdout.getReader()
       const decoder = new TextDecoder()
+      const filter = new KiroStreamFilter()
 
       try {
         while (true) {
@@ -106,14 +186,22 @@ export class KiroBridge implements BridgeInterface {
           if (!chunk) continue
           collectedOutput.push(chunk)
 
-          // Emit text-delta events for real-time streaming
-          sessionEventBus.emit(task.sessionId, { type: 'text-delta', content: chunk })
-          onEvent({ type: 'text-delta', content: chunk, timestamp: new Date().toISOString() })
+          const filtered = filter.processChunk(chunk)
+          if (filtered) {
+            sessionEventBus.emit(task.sessionId, { type: 'text-delta', content: filtered })
+            onEvent({ type: 'text-delta', content: filtered, timestamp: new Date().toISOString() })
+          }
         }
       } catch (err) {
         if (!controller.signal.aborted) {
           console.error('[KiroBridge] Error reading stdout:', err instanceof Error ? err.message : err)
         }
+      }
+
+      const remaining = filter.flush()
+      if (remaining) {
+        sessionEventBus.emit(task.sessionId, { type: 'text-delta', content: remaining })
+        onEvent({ type: 'text-delta', content: remaining, timestamp: new Date().toISOString() })
       }
 
       // Read any stderr

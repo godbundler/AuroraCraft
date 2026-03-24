@@ -17,6 +17,7 @@ export class KiroFileWatcher {
   private changes: FileChangeEvent[] = []
   private watcher: FSWatcher | null = null
   private debounceTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private stopped = false
 
   onChange: OnChangeCallback = () => {}
 
@@ -50,6 +51,8 @@ export class KiroFileWatcher {
   }
 
   async stop(): Promise<void> {
+    this.stopped = true
+
     // Stop the live watcher
     if (this.watcher) {
       this.watcher.close()
@@ -130,11 +133,15 @@ export class KiroFileWatcher {
   }
 
   private resolveFileChange(filename: string): void {
+    if (this.stopped) return
+
     const absolutePath = join(this.directory, filename)
     const relativePath = filename
 
     stat(absolutePath)
       .then((stats) => {
+        if (this.stopped) return
+        if (!stats.isFile()) return
         const hadBefore = this.snapshot.has(relativePath)
         const type: FileChangeEvent['type'] = hadBefore ? 'update' : 'create'
         this.recordChange({ type, path: relativePath })
@@ -142,6 +149,7 @@ export class KiroFileWatcher {
         this.snapshot.set(relativePath, stats.mtimeMs)
       })
       .catch(() => {
+        if (this.stopped) return
         // File doesn't exist — it was deleted
         if (this.snapshot.has(relativePath)) {
           this.recordChange({ type: 'delete', path: relativePath })

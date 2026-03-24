@@ -1,4 +1,4 @@
-import type { MessagePart, TodoItem } from './types.js'
+import type { MessagePart } from './types.js'
 
 // ── ANSI escape code stripping ───────────────────────────────────────
 
@@ -13,75 +13,80 @@ export function stripAnsi(input: string): string {
 const THINKING_BLOCK_RE = /<thinking>([\s\S]*?)<\/thinking>/gi
 const REASONING_BLOCK_RE = /<reasoning>([\s\S]*?)<\/reasoning>/gi
 
-const FILE_CREATED_RE = /(?:Created?\s+file|New\s+file|Writing\s+to|Wrote)\s*:\s*(.+)/gi
-const FILE_UPDATED_RE = /(?:Updated?\s+file|Modified|Edited|Patched)\s*:\s*(.+)/gi
-const FILE_DELETED_RE = /(?:Deleted?|Removed?)\s*:\s*(.+)/gi
-const FILE_RENAMED_RE = /(?:Renamed?|Moved?)\s*:\s*(.+?)\s*(?:→|->|to)\s*(.+)/gi
-const FILE_READ_RE = /(?:Reading|Read\s+file)\s*:\s*(.+)/gi
+// ── Kiro CLI output helpers ───────────────────────────────────────────
 
-const TOOL_EXEC_RE = /(?:Running\s+command|Executing|Ran|Execute)\s*:\s*(.+)/gi
-const TOOL_CALL_RE = /(?:Tool\s+call|Using\s+tool|Calling)\s*:\s*(\S+)\s*(?:on|for|with)?\s*(.*)/gi
-
-const TODO_BLOCK_RE = /(?:^|\n)\s*(?:TODO|Tasks?|Checklist)\s*:\s*\n((?:\s*[-*\[\]✓✗☐☑xX●○]\s*.+\n?)+)/gi
-const TODO_ITEM_RE = /\s*[-*]\s*\[([xX✓✗ ])\]\s*(.+)|[-*●○]\s*(.+)/g
-
-// ── Helpers ──────────────────────────────────────────────────────────
-
-interface RawBlock {
-  type: 'thinking' | 'file' | 'tool' | 'todo-list'
-  start: number
-  end: number
-  part: MessagePart
+function isKiroMetadataLine(line: string): boolean {
+  if (!line) return false
+  if (line.includes('tools are now trusted')) return true
+  if (/^I.ll (?:create|modify|update|edit|replace) the following/.test(line)) return true
+  if (/^[+-]\s*\d+\s*:/.test(line)) return true
+  if (/^\s+\d+,\s*\d+:/.test(line)) return true
+  if (line.startsWith('✓')) return true
+  if (/^(?:Reading (?:directory|file)|Creating|Replacing|Deleting|Renaming):/.test(line)) return true
+  if (/^\s*-\s*Completed in/.test(line)) return true
+  if (/[▸►].*Credits:/.test(line)) return true
+  if (line.includes('(using tool:')) return true
+  if (line.includes('Agents can sometimes do unexpected')) return true
+  if (line.includes('Learn more at https://kiro')) return true
+  if (/^\(?Purpose:/.test(line)) return true
+  return false
 }
 
-function parseTodoStatus(marker: string): TodoItem['status'] {
-  const m = marker.trim().toLowerCase()
-  if (m === 'x' || m === '✓' || m === '✗') return 'completed'
-  return 'pending'
+function collapseScriptTokens(text: string): string {
+  const lines = text.split('\n')
+  const parts: string[] = []
+  let token = ''
+
+  for (const line of lines) {
+    if (line === '') {
+      if (token) {
+        parts.push(token)
+        token = ''
+      }
+    } else {
+      token += line
+    }
+  }
+  if (token) parts.push(token)
+
+  return parts.join(' ')
 }
 
-function parseTodoItems(block: string): TodoItem[] {
-  const items: TodoItem[] = []
-  let match: RegExpExecArray | null
-  const re = new RegExp(TODO_ITEM_RE.source, 'g')
+function extractResponseText(rawOutput: string): string {
+  const lines = rawOutput.split('\n')
+  const responseChunks: string[][] = []
+  let currentChunk: string[] | null = null
 
-  while ((match = re.exec(block)) !== null) {
-    if (match[1] !== undefined && match[2]) {
-      items.push({ text: match[2].trim(), status: parseTodoStatus(match[1]) })
-    } else if (match[3]) {
-      items.push({ text: match[3].trim(), status: 'pending' })
+  for (const line of lines) {
+    const trimmed = line.trim()
+
+    if (trimmed.startsWith('> ') || trimmed === '>') {
+      if (!currentChunk) currentChunk = []
+      currentChunk.push(trimmed.length > 2 ? trimmed.slice(2) : '')
+      continue
+    }
+
+    if (isKiroMetadataLine(trimmed)) {
+      if (currentChunk && currentChunk.length > 0) {
+        responseChunks.push(currentChunk)
+        currentChunk = null
+      }
+      continue
+    }
+
+    if (currentChunk !== null) {
+      currentChunk.push(trimmed)
     }
   }
 
-  return items
-}
-
-function trimPath(raw: string): string {
-  return raw.trim().replace(/[`'"]/g, '').trim()
-}
-
-function collectPatternBlocks(
-  raw: string,
-  regex: RegExp,
-  buildPart: (match: RegExpExecArray) => MessagePart | null,
-): RawBlock[] {
-  const blocks: RawBlock[] = []
-  const re = new RegExp(regex.source, regex.flags)
-  let match: RegExpExecArray | null
-
-  while ((match = re.exec(raw)) !== null) {
-    const part = buildPart(match)
-    if (part) {
-      blocks.push({
-        type: part.type as RawBlock['type'],
-        start: match.index,
-        end: match.index + match[0].length,
-        part,
-      })
-    }
+  if (currentChunk && currentChunk.length > 0) {
+    responseChunks.push(currentChunk)
   }
 
-  return blocks
+  return responseChunks
+    .map((chunk) => collapseScriptTokens(chunk.join('\n')))
+    .filter(Boolean)
+    .join('\n\n')
 }
 
 // ── Main parser ──────────────────────────────────────────────────────
@@ -89,12 +94,12 @@ function collectPatternBlocks(
 /**
  * Parse raw Kiro CLI stdout output into structured MessagePart[] arrays.
  *
- * Detects thinking/reasoning blocks, file operations, tool executions,
- * and todo lists within the output. Everything that doesn't match a
- * known pattern is returned as a text part.
+ * Extracts thinking/reasoning blocks and clean response text,
+ * stripping kiro-cli metadata (preamble, diff output, tool lines,
+ * credits) and collapsing script PTY token artifacts.
  *
- * Defensive: if parsing fails for any reason, the entire raw output is
- * returned as a single text part.
+ * File operations are NOT extracted here — the KiroFileWatcher
+ * provides accurate file change detection with relative paths.
  */
 export function parseKiroOutput(rawOutput: string): MessagePart[] {
   if (!rawOutput || typeof rawOutput !== 'string') {
@@ -103,124 +108,27 @@ export function parseKiroOutput(rawOutput: string): MessagePart[] {
 
   try {
     rawOutput = stripAnsi(rawOutput)
-    const blocks: RawBlock[] = []
-
-    // ── Thinking / reasoning blocks ────────────────────────────────
-    blocks.push(
-      ...collectPatternBlocks(rawOutput, THINKING_BLOCK_RE, (m) => ({
-        type: 'thinking',
-        content: m[1].trim(),
-      })),
-    )
-    blocks.push(
-      ...collectPatternBlocks(rawOutput, REASONING_BLOCK_RE, (m) => ({
-        type: 'thinking',
-        content: m[1].trim(),
-      })),
-    )
-
-    // ── File operations ────────────────────────────────────────────
-    blocks.push(
-      ...collectPatternBlocks(rawOutput, FILE_CREATED_RE, (m) => {
-        const path = trimPath(m[1])
-        return path ? { type: 'file', action: 'create', path } : null
-      }),
-    )
-    blocks.push(
-      ...collectPatternBlocks(rawOutput, FILE_UPDATED_RE, (m) => {
-        const path = trimPath(m[1])
-        return path ? { type: 'file', action: 'update', path } : null
-      }),
-    )
-    blocks.push(
-      ...collectPatternBlocks(rawOutput, FILE_DELETED_RE, (m) => {
-        const path = trimPath(m[1])
-        return path ? { type: 'file', action: 'delete', path } : null
-      }),
-    )
-    blocks.push(
-      ...collectPatternBlocks(rawOutput, FILE_RENAMED_RE, (m) => {
-        const path = trimPath(m[1])
-        const newPath = trimPath(m[2])
-        return path ? { type: 'file', action: 'rename', path, newPath: newPath || undefined } : null
-      }),
-    )
-    blocks.push(
-      ...collectPatternBlocks(rawOutput, FILE_READ_RE, (m) => {
-        const path = trimPath(m[1])
-        return path ? { type: 'file', action: 'read', path } : null
-      }),
-    )
-
-    // ── Tool executions ────────────────────────────────────────────
-    blocks.push(
-      ...collectPatternBlocks(rawOutput, TOOL_EXEC_RE, (m) => {
-        const command = m[1].trim()
-        return command ? { type: 'tool', tool: 'command', path: command } : null
-      }),
-    )
-    blocks.push(
-      ...collectPatternBlocks(rawOutput, TOOL_CALL_RE, (m) => {
-        const tool = m[1].trim()
-        const path = m[2]?.trim() || tool
-        return tool ? { type: 'tool', tool, path } : null
-      }),
-    )
-
-    // ── Todo lists ─────────────────────────────────────────────────
-    blocks.push(
-      ...collectPatternBlocks(rawOutput, TODO_BLOCK_RE, (m) => {
-        const items = parseTodoItems(m[1])
-        return items.length > 0 ? { type: 'todo-list', items } : null
-      }),
-    )
-
-    // If no structured blocks were found, return the whole output as text
-    if (blocks.length === 0) {
-      const trimmed = rawOutput.trim()
-      return trimmed ? [{ type: 'text', content: trimmed }] : []
-    }
-
-    // ── Sort blocks by position and interleave text parts ──────────
-    blocks.sort((a, b) => a.start - b.start)
-
-    // Deduplicate overlapping blocks (keep the one that starts first)
-    const deduped: RawBlock[] = []
-    let lastEnd = 0
-    for (const block of blocks) {
-      if (block.start >= lastEnd) {
-        deduped.push(block)
-        lastEnd = block.end
-      }
-    }
-
     const parts: MessagePart[] = []
-    let cursor = 0
 
-    for (const block of deduped) {
-      // Emit any text between the previous block and this one
-      if (block.start > cursor) {
-        const text = rawOutput.slice(cursor, block.start).trim()
-        if (text) {
-          parts.push({ type: 'text', content: text })
-        }
-      }
-
-      parts.push(block.part)
-      cursor = block.end
+    // Extract thinking / reasoning blocks
+    const thinkingRe = new RegExp(THINKING_BLOCK_RE.source, THINKING_BLOCK_RE.flags)
+    let match: RegExpExecArray | null
+    while ((match = thinkingRe.exec(rawOutput)) !== null) {
+      parts.push({ type: 'thinking', content: match[1].trim() })
+    }
+    const reasoningRe = new RegExp(REASONING_BLOCK_RE.source, REASONING_BLOCK_RE.flags)
+    while ((match = reasoningRe.exec(rawOutput)) !== null) {
+      parts.push({ type: 'thinking', content: match[1].trim() })
     }
 
-    // Emit trailing text after the last block
-    if (cursor < rawOutput.length) {
-      const text = rawOutput.slice(cursor).trim()
-      if (text) {
-        parts.push({ type: 'text', content: text })
-      }
+    // Extract clean response text
+    const responseText = extractResponseText(rawOutput)
+    if (responseText) {
+      parts.push({ type: 'text', content: responseText })
     }
 
     return parts
   } catch {
-    // Defensive fallback: return raw output as a single text part
     return [{ type: 'text', content: rawOutput.trim() }]
   }
 }
@@ -228,8 +136,11 @@ export function parseKiroOutput(rawOutput: string): MessagePart[] {
 // ── Text extraction ──────────────────────────────────────────────────
 
 /**
- * Strip metadata markers, thinking blocks, and structural patterns from
- * Kiro CLI output, returning only the clean human-readable text content.
+ * Extract clean human-readable text from Kiro CLI output.
+ *
+ * Strips preamble, tool blocks, diff output, metadata lines, and
+ * credits. Extracts only `> ` response blocks and collapses script
+ * PTY token artifacts back into flowing text.
  */
 export function extractTextContent(rawOutput: string): string {
   if (!rawOutput || typeof rawOutput !== 'string') {
@@ -237,32 +148,8 @@ export function extractTextContent(rawOutput: string): string {
   }
 
   try {
-    let text = stripAnsi(rawOutput)
-
-    // Remove thinking/reasoning blocks entirely
-    text = text.replace(THINKING_BLOCK_RE, '')
-    text = text.replace(REASONING_BLOCK_RE, '')
-
-    // Remove file operation lines
-    text = text.replace(FILE_CREATED_RE, '')
-    text = text.replace(FILE_UPDATED_RE, '')
-    text = text.replace(FILE_DELETED_RE, '')
-    text = text.replace(FILE_RENAMED_RE, '')
-    text = text.replace(FILE_READ_RE, '')
-
-    // Remove tool execution lines
-    text = text.replace(TOOL_EXEC_RE, '')
-    text = text.replace(TOOL_CALL_RE, '')
-
-    // Remove todo blocks
-    text = text.replace(TODO_BLOCK_RE, '')
-
-    // Collapse excessive blank lines
-    text = text.replace(/\n{3,}/g, '\n\n')
-
-    return text.trim()
+    return extractResponseText(stripAnsi(rawOutput))
   } catch {
-    // Defensive fallback
     return rawOutput.trim()
   }
 }

@@ -780,9 +780,9 @@ function ChatSession({ projectId, sessionId, pendingMessage, onPendingMessageSen
   onFileSelect?: (path: string) => void
 }) {
   const { session, messages, isLoading, sendMessage, isSending, sendError, invalidateAndRefetch, cancelSession, isCancelling } = useAgentSession(projectId, sessionId)
-  const streamActive = !!projectId && !!sessionId && (!session || session.status === 'idle' || session.status === 'running')
-  const { streamingState, isConnected, resetStream } = useStreamingAgent(projectId, sessionId, streamActive)
   const [awaitingStream, setAwaitingStream] = useState(false)
+  const streamActive = !!projectId && !!sessionId && (!session || session.status === 'idle' || session.status === 'running' || awaitingStream)
+  const { streamingState, isConnected, resetStream } = useStreamingAgent(projectId, sessionId, streamActive)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const pendingSentRef = useRef(false)
   const prevFileChangesRef = useRef(0)

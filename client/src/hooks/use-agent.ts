@@ -212,7 +212,10 @@ function processStreamEvent(acc: StreamAccumulator, event: StreamEvent): void {
     }
 
     case 'file-op': {
-      if (!acc.activeStream) break
+      if (!acc.isStreaming && !acc.activeStream) {
+        acc.isStreaming = true
+        acc.activeStream = true
+      }
       const existing = acc.itemById.get(event.id)
       if (existing && existing.kind === 'file-op') {
         existing.fileAction = event.action

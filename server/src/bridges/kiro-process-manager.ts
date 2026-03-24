@@ -28,17 +28,20 @@ export class KiroProcessManager {
     const homeDir = `/home/${systemUser}`
 
     const modelFlag = model ? ` --model '${escapeForSingleQuotes(model)}'` : ''
-    const command = `cd '${escapeForSingleQuotes(directory)}' && kiro-cli chat --no-interactive --trust-all-tools${modelFlag} '${escapedPrompt}'`
+    const kiroCmd = `kiro-cli chat --no-interactive --trust-all-tools${modelFlag} '${escapedPrompt}'`
+    const command = `cd '${escapeForSingleQuotes(directory)}' && script -qfec '${escapeForSingleQuotes(kiroCmd)}' /dev/null`
 
     console.log(`[KiroProcess] Spawning kiro-cli for session ${sessionId} (user: ${systemUser}, dir: ${directory})`)
 
-    const child = spawn('su', ['-', systemUser, '-c', command], {
+    const child = spawn('runuser', ['-l', systemUser, '-c', command], {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,
       env: {
         ...process.env,
         HOME: homeDir,
         PATH: process.env.PATH,
+        COLUMNS: '9999',
+        TERM: 'dumb',
       },
     })
 
