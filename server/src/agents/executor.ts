@@ -6,6 +6,23 @@ import { agentLogs } from '../db/schema/agent-logs.js'
 import { bridgeRegistry } from '../bridges/index.js'
 import type { AgentExecutionContext, AgentStreamCallback, AgentExecutionResult } from './types.js'
 
+function cleanBadgeMarkers(text: string): string {
+  if (!text) return text
+  // Remove any line containing badge markers, regardless of position
+  return text
+    .split('\n')
+    .filter(line => {
+      const trimmed = line.trim()
+      // Skip empty lines
+      if (!trimmed) return true
+      // Remove lines with badge markers
+      return !/\[(?:Created|Updated|Read|Deleted|Renamed)\]/.test(trimmed)
+    })
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 export class AgentExecutor {
   private activeExecutions = new Map<string, boolean>()
 
@@ -78,7 +95,7 @@ export class AgentExecutor {
         await this.failSession(context.sessionId, error)
 
         // Save agent message: include partial output if available (e.g. timeout with partial work)
-        const partialOutput = result.output ? `${result.output}\n\n⚠️ ${error}` : `⚠️ ${error}`
+        const partialOutput = result.output ? `${cleanBadgeMarkers(result.output)}\n\n⚠️ ${error}` : `⚠️ ${error}`
         await db.insert(agentMessages).values({
           sessionId: context.sessionId,
           role: 'agent',
@@ -95,7 +112,7 @@ export class AgentExecutor {
       await db.insert(agentMessages).values({
         sessionId: context.sessionId,
         role: 'agent',
-        content: result.output,
+        content: cleanBadgeMarkers(result.output),
         metadata: result.metadata?.parts ? { parts: result.metadata.parts } : undefined,
       })
 

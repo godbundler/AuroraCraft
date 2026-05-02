@@ -1,6 +1,9 @@
-import { spawn, type ChildProcess } from 'child_process'
-import { mkdir } from 'fs/promises'
+import { spawn, type ChildProcess, execFile } from 'child_process'
+import { mkdir, writeFile, chown } from 'fs/promises'
+import { promisify } from 'util'
 import { env } from '../env.js'
+
+const execFileAsync = promisify(execFile)
 
 interface OpenCodeInstance {
   process: ChildProcess
@@ -13,6 +16,41 @@ interface OpenCodeInstance {
   idleTimer?: ReturnType<typeof setTimeout>
 }
 
+// ── User ID resolution (cached) ─────────────────────────────────────
+
+const userIdCache = new Map<string, { uid: number; gid: number }>()
+
+async function resolveUserIds(username: string): Promise<{ uid: number; gid: number }> {
+  const cached = userIdCache.get(username)
+  if (cached) return cached
+
+  const [uidRes, gidRes] = await Promise.all([
+    execFileAsync('id', ['-u', username]),
+    execFileAsync('id', ['-g', username]),
+  ])
+  const uid = parseInt(uidRes.stdout.trim(), 10)
+  const gid = parseInt(gidRes.stdout.trim(), 10)
+  if (!Number.isFinite(uid) || !Number.isFinite(gid)) {
+    throw new Error(`Could not resolve uid/gid for user ${username}`)
+  }
+  const result = { uid, gid }
+  userIdCache.set(username, result)
+  return result
+}
+
+// Recursive chown via the `chown` binary — avoids stdin-based hangs that can
+// plague `sudo tee` / `execFile` with stdin, and is faster than walking the tree in JS.
+async function chownRecursive(path: string, uid: number, gid: number): Promise<void> {
+  await execFileAsync('chown', ['-R', `${uid}:${gid}`, path])
+}
+
+// Escape a string for safe embedding inside single quotes in a POSIX shell.
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`
+}
+
+// ── Process Manager ─────────────────────────────────────────────────
+
 export class OpenCodeProcessManager {
   private instances = new Map<string, OpenCodeInstance>()
   private startPromises = new Map<string, Promise<OpenCodeInstance>>()
@@ -20,6 +58,9 @@ export class OpenCodeProcessManager {
   private portMin: number
   private portMax: number
   private idleTimeoutMs: number
+  // Hard timeout on the entire startup path. Any longer and we assume a hang
+  // and tear everything down so startPromises can never deadlock the bridge.
+  private readonly STARTUP_TIMEOUT_MS = 45_000
 
   constructor() {
     this.portMin = env.OPENCODE_PORT_MIN
@@ -107,19 +148,143 @@ export class OpenCodeProcessManager {
     this.usedPorts.delete(port)
   }
 
-  private async startInstance(directory: string): Promise<OpenCodeInstance> {
+  /**
+   * Start an OpenCode instance with a hard timeout. If startup exceeds
+   * STARTUP_TIMEOUT_MS, any partial state (spawned process, allocated port,
+   * registered instance) is torn down and the promise rejects. This guarantees
+   * a hung startup can never permanently deadlock the bridge.
+   */
+  private startInstance(directory: string): Promise<OpenCodeInstance> {
+    // Tracked resources so the timeout handler can clean up partial state
+    const state: { port: number | null; child: ChildProcess | null; settled: boolean } = {
+      port: null,
+      child: null,
+      settled: false,
+    }
+
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        if (state.settled) return
+        console.error(`[ProcessManager] OpenCode startup timed out after ${this.STARTUP_TIMEOUT_MS}ms for ${directory}`)
+        if (state.child) {
+          try { state.child.kill('SIGKILL') } catch { /* ignore */ }
+        }
+        const partial = this.instances.get(directory)
+        if (partial) {
+          this.cleanupInstance(directory, partial)
+        } else if (state.port !== null) {
+          // cleanupInstance was not called (instance never registered) — release port directly
+          this.releasePort(state.port)
+        }
+        reject(new Error(
+          `OpenCode failed to start within ${this.STARTUP_TIMEOUT_MS / 1000}s for ${directory}. ` +
+          `Ensure 'opencode' is installed and accessible.`,
+        ))
+      }, this.STARTUP_TIMEOUT_MS)
+    })
+
+    const startPromise = this.startInstanceInternal(directory, state)
+
+    return Promise.race([startPromise, timeoutPromise]).finally(() => {
+      state.settled = true
+      if (timeoutHandle) clearTimeout(timeoutHandle)
+    })
+  }
+
+  private async startInstanceInternal(
+    directory: string,
+    state: { port: number | null; child: ChildProcess | null; settled: boolean },
+  ): Promise<OpenCodeInstance> {
     const port = this.allocatePort()
+    state.port = port
     const url = `http://localhost:${port}`
 
     console.log(`[ProcessManager] Starting OpenCode for ${directory} on port ${port}`)
 
-    await mkdir(directory, { recursive: true })
+    // Extract username from directory path: /home/auroracraft-{username}/{project}
+    const match = directory.match(/\/home\/auroracraft-([^/]+)/)
+    const username = match ? match[1] : null
+    const systemUser = username ? `auroracraft-${username}` : null
 
-    const child = spawn('opencode', ['serve', '--port', String(port)], {
-      cwd: directory,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: false,
-    })
+    // Prepare project directory + config files using native fs.
+    // The server runs as root so we don't need sudo (previous `sudo tee` hung indefinitely).
+    if (systemUser) {
+      try {
+        const { uid, gid } = await resolveUserIds(systemUser)
+
+        // Create project directory and chown to owner
+        await mkdir(directory, { recursive: true })
+        await chownRecursive(directory, uid, gid)
+
+        const configContent = JSON.stringify({
+          $schema: 'https://opencode.ai/config.json',
+          permission: 'allow',
+          tools: { question: false },
+        }, null, 2)
+
+        // User-level config: /home/{user}/.config/opencode/opencode.json
+        const userConfigDir = `/home/${systemUser}/.config/opencode`
+        const userConfigPath = `${userConfigDir}/opencode.json`
+        await mkdir(userConfigDir, { recursive: true })
+        await writeFile(userConfigPath, configContent, 'utf8')
+        await chownRecursive(`/home/${systemUser}/.config/opencode`, uid, gid)
+
+        // Project-level config: {directory}/opencode.json
+        const projectConfigPath = `${directory}/opencode.json`
+        await writeFile(projectConfigPath, configContent, 'utf8')
+        await chown(projectConfigPath, uid, gid)
+      } catch (err) {
+        console.warn(`[ProcessManager] Failed to prepare ${directory}:`, err instanceof Error ? err.message : err)
+      }
+    } else {
+      await mkdir(directory, { recursive: true })
+    }
+
+    // Bail out if the outer timeout already fired — don't proceed to spawning.
+    if (state.settled) {
+      throw new Error('OpenCode startup was aborted')
+    }
+
+    // Spawn OpenCode as the project owner using runuser -l (consistent with the Kiro bridge).
+    // runuser -l resets env, so OPENCODE_DANGEROUSLY_SKIP_PERMISSIONS must be set in the
+    // shell command itself rather than via spawn's `env` option.
+    const opencodePath = '/home/codespace/nvm/current/bin/opencode'
+
+    let child: ChildProcess
+    if (systemUser) {
+      const shellCmd =
+        `cd ${shellQuote(directory)} && ` +
+        `OPENCODE_DANGEROUSLY_SKIP_PERMISSIONS=true ` +
+        `${shellQuote(opencodePath)} serve --port ${port}`
+
+      // runuser -l resets the environment to a clean login shell, so any env
+      // passed here is discarded. Env vars needed by opencode are set inside
+      // the shell command itself (e.g. OPENCODE_DANGEROUSLY_SKIP_PERMISSIONS).
+      child = spawn('sudo', ['runuser', '-l', systemUser, '-c', shellCmd], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: false,
+      })
+    } else {
+      child = spawn(opencodePath, ['serve', '--port', String(port)], {
+        cwd: directory,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: false,
+        env: {
+          ...process.env,
+          OPENCODE_DANGEROUSLY_SKIP_PERMISSIONS: 'true',
+          PATH: process.env.PATH,
+        },
+      })
+    }
+    state.child = child
+
+    // Timeout may have fired between config prep and spawn completing; bail out
+    // BEFORE registering the instance so no zombie entry is left in the map.
+    if (state.settled) {
+      try { child.kill('SIGKILL') } catch { /* ignore */ }
+      throw new Error('OpenCode startup was aborted')
+    }
 
     const instance: OpenCodeInstance = {
       process: child,
@@ -151,15 +316,29 @@ export class OpenCodeProcessManager {
       this.cleanupInstance(directory, instance)
     })
 
-    const ready = await this.waitForReady(url, 30000)
+    const ready = await this.waitForReady(url, 30_000)
     if (!ready) {
-      console.error(`[ProcessManager] OpenCode failed to start within 30s on port ${port}`)
+      console.error(`[ProcessManager] OpenCode failed to bind within 30s on port ${port}`)
       await this.stopInstance(directory)
       throw new Error(`OpenCode failed to start for ${directory}. Make sure 'opencode' is installed and accessible.`)
     }
 
+    // Bail out if the outer timeout fired while waiting for readiness.
+    if (state.settled) {
+      this.cleanupInstance(directory, instance)
+      throw new Error('OpenCode startup was aborted')
+    }
+
+    // Post-ready stabilization: guard against processes that bind briefly then exit.
+    await new Promise((r) => setTimeout(r, 500))
     if (instance.status === 'stopped') {
-      throw new Error(`OpenCode process exited before becoming ready for ${directory}`)
+      throw new Error(`OpenCode process exited shortly after becoming ready for ${directory}`)
+    }
+
+    // Final abort check before publishing the instance as ready.
+    if (state.settled) {
+      this.cleanupInstance(directory, instance)
+      throw new Error('OpenCode startup was aborted')
     }
 
     instance.status = 'ready'

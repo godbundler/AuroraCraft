@@ -130,6 +130,7 @@ interface StreamAccumulator {
   nextOrder: number
   pendingTransitions: PendingTransition[]
   activeStream: boolean
+  textBuffer: string
 }
 
 function createEmptyAccumulator(): StreamAccumulator {
@@ -143,6 +144,7 @@ function createEmptyAccumulator(): StreamAccumulator {
     nextOrder: 0,
     pendingTransitions: [],
     activeStream: false,
+    textBuffer: '',
   }
 }
 
@@ -247,6 +249,64 @@ function processStreamEvent(acc: StreamAccumulator, event: StreamEvent): void {
       break
     }
 
+    case 'question': {
+      if (!acc.isStreaming && !acc.activeStream) {
+        acc.isStreaming = true
+        acc.activeStream = true
+      }
+      const existing = acc.itemById.get(event.id)
+      if (existing && existing.kind === 'question') {
+        existing.questionText = event.question
+        existing.questionStatus = event.status
+      } else {
+        const item: StreamingItem = {
+          id: event.id,
+          kind: 'question',
+          order: acc.nextOrder++,
+          questionText: event.question,
+          questionStatus: event.status,
+        }
+        acc.items.push(item)
+        acc.itemById.set(item.id, item)
+      }
+      break
+    }
+
+    case 'build': {
+      if (!acc.isStreaming && !acc.activeStream) {
+        acc.isStreaming = true
+        acc.activeStream = true
+      }
+      const existing = acc.itemById.get(event.id)
+      if (existing && existing.kind === 'build') {
+        existing.buildCommand = event.command
+        existing.buildStatus = event.status
+        existing.buildLines = event.lines
+        existing.buildArtifactName = event.artifactName
+        existing.buildArtifactPath = event.artifactPath
+        existing.buildArtifactSize = event.artifactSize
+        existing.buildDurationMs = event.durationMs
+        existing.buildError = event.error
+      } else {
+        const item: StreamingItem = {
+          id: event.id,
+          kind: 'build',
+          order: acc.nextOrder++,
+          buildCommand: event.command,
+          buildStatus: event.status,
+          buildLines: event.lines,
+          buildArtifactName: event.artifactName,
+          buildArtifactPath: event.artifactPath,
+          buildArtifactSize: event.artifactSize,
+          buildDurationMs: event.durationMs,
+          buildError: event.error,
+        }
+        acc.items.push(item)
+        acc.itemById.set(item.id, item)
+      }
+      break
+    }
+
     case 'todo':
       acc.todos = event.items
       break
@@ -270,8 +330,26 @@ function processStreamEvent(acc: StreamAccumulator, event: StreamEvent): void {
       acc.activeStream = false
       break
 
-    case 'error':
+    case 'error': {
+      // Stop streaming and show error message
+      acc.isStreaming = false
+      acc.activeStream = false
+      
+      // Add error message as text
+      const errorText = `\n\n⚠️ **Error:** ${event.message}\n\n${
+        event.message.includes('usage exceeded') || event.message.includes('rate limit')
+          ? 'The AI service has reached its usage limit. Please try again later or use a different model.'
+          : 'An error occurred while processing your request.'
+      }`
+      
+      if (acc.textBuffer) {
+        acc.textBuffer += errorText
+      } else {
+        acc.textBuffer = errorText
+      }
+      
       break
+    }
   }
 }
 
@@ -281,8 +359,21 @@ export function useStreamingAgent(projectId: string, sessionId: string, isActive
   const eventSourceRef = useRef<EventSource | null>(null)
   const [snapshot, setSnapshot] = useState<StreamingState>(EMPTY_STREAMING_STATE)
   const [isConnected, setIsConnected] = useState(false)
+  const storageKey = `auroracraft-stream:${projectId}:${sessionId}`
 
-  // Periodic state sync (batches rapid events into ~10fps renders)
+  useEffect(() => {
+    if (!projectId || !sessionId) return
+    try {
+      const raw = window.localStorage.getItem(storageKey)
+      if (!raw) return
+      const parsed = JSON.parse(raw) as StreamingState
+      setSnapshot(parsed)
+    } catch {
+      // ignore storage parse errors
+    }
+  }, [projectId, sessionId, storageKey])
+
+  // Periodic state sync (batches rapid events into ~60fps renders for smooth streaming)
   useEffect(() => {
     if (!isActive) return
 
@@ -290,12 +381,18 @@ export function useStreamingAgent(projectId: string, sessionId: string, isActive
       const hasDueTransitions = accRef.current.pendingTransitions.some(t => Date.now() >= t.at)
       if (dirtyRef.current || hasDueTransitions) {
         dirtyRef.current = false
-        setSnapshot(snapshotAccumulator(accRef.current))
+        const nextSnapshot = snapshotAccumulator(accRef.current)
+        setSnapshot(nextSnapshot)
+        try {
+          window.localStorage.setItem(storageKey, JSON.stringify(nextSnapshot))
+        } catch {
+          // ignore storage failures
+        }
       }
-    }, 100)
+    }, 16)
 
     return () => clearInterval(interval)
-  }, [isActive])
+  }, [isActive, storageKey])
 
   // EventSource connection
   useEffect(() => {
@@ -337,7 +434,12 @@ export function useStreamingAgent(projectId: string, sessionId: string, isActive
     accRef.current = createEmptyAccumulator()
     dirtyRef.current = false
     setSnapshot(EMPTY_STREAMING_STATE)
-  }, [])
+    try {
+      window.localStorage.removeItem(storageKey)
+    } catch {
+      // ignore storage failures
+    }
+  }, [storageKey])
 
   return {
     streamingState: snapshot,

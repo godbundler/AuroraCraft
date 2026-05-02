@@ -73,6 +73,7 @@
 .markdown-content {
   line-height: 1.7;
   color: var(--color-text);
+  font-size: 0.875rem;
 }
 
 .markdown-content > :first-child {
@@ -83,39 +84,19 @@
   margin-bottom: 0;
 }
 
-.markdown-content h1 {
-  font-size: 1.5rem;
-  font-weight: 700;
-  margin-top: 1.5rem;
-  margin-bottom: 0.75rem;
-  color: var(--color-text);
-  border-bottom: 1px solid var(--color-border);
-  padding-bottom: 0.5rem;
-}
-
-.markdown-content h2 {
-  font-size: 1.25rem;
-  font-weight: 600;
-  margin-top: 1.25rem;
-  margin-bottom: 0.5rem;
-  color: var(--color-text);
-}
-
-.markdown-content h3 {
-  font-size: 1.1rem;
-  font-weight: 600;
-  margin-top: 1rem;
-  margin-bottom: 0.5rem;
-  color: var(--color-text);
-}
-
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
 .markdown-content h4,
 .markdown-content h5,
 .markdown-content h6 {
+  font-size: 1em;
   font-weight: 600;
   margin-top: 0.75rem;
   margin-bottom: 0.5rem;
   color: var(--color-text);
+  border-bottom: none;
+  padding-bottom: 0;
 }
 
 .markdown-content p {

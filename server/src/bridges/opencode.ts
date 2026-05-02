@@ -70,12 +70,144 @@ const TOOL_TO_FILE_ACTION: Record<string, FileAction> = {
   read: 'read', file_read: 'read', cat: 'read', read_file: 'read', readFile: 'read',
 }
 
+const BUILD_COMMAND_RE = /(^|\s)(?:\.\/)?(?:mvn|mvnw|gradle|gradlew)(?:\s|$)/i
+const BUILD_ARTIFACT_RE = [
+  /^target\//i,
+  /^build\//i,
+  /^out\//i,
+  /^\.gradle\//i,
+  /^\.mvn\//i,
+  /(?:^|\/)(?:classes|generated|generated-sources|generated-test-sources|tmp|libs|reports|test-results)\//i,
+  /\.(?:class|jar|war|ear|lst|properties|pom|sha1|md5)$/i,
+  /(?:^|\/)(?:createdFiles|inputFiles)\.lst$/i,
+  /(?:^|\/)consumer.*\.pom$/i,
+]
+
 function extractFilePath(input: Record<string, unknown>): string {
   return String(input.path ?? input.filePath ?? input.file_path ?? input.filename ?? input.file ?? input.target ?? input.source ?? '')
 }
 
 function extractNewPath(input: Record<string, unknown>): string {
   return String(input.new_path ?? input.newFilePath ?? input.destination ?? input.target ?? input.newPath ?? '')
+}
+
+function isBuildCommand(command: string): boolean {
+  return BUILD_COMMAND_RE.test(command.trim())
+}
+
+function isBuildArtifactPath(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, '/').replace(/^\.?\//, '')
+  return BUILD_ARTIFACT_RE.some((pattern) => pattern.test(normalized))
+}
+
+function cleanAssistantText(text: string): string {
+  if (!text) return ''
+  const withoutInline = text.replace(
+    /(\s*)\[(Created|Updated|Read|Deleted|Renamed)\]\s+([^\s`"']+|`[^`]+`)/g,
+    (_m, leadingWs) => leadingWs || ' ',
+  )
+  return withoutInline
+    .replace(/\[Run\]\s+[^\n]*/g, '')
+    .replace(/(?:^|[\s.])\[[0-9;]{1,20}m/g, ' ')
+    .replace(/(\S)\s+(#{2,6}\s)/g, '$1\n\n$2')
+    .replace(/(#{2,6})([A-Za-z])/g, '$1 $2')
+    .replace(/Files:-/g, 'Files:\n- ')
+    .replace(/^\s*\[(Created|Updated|Read|Deleted|Renamed)\]\s+.*$/gim, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function parseBuildOutput(command: string, output: string, error?: string, endedAt?: number, startedAt?: number) {
+  const text = String(output ?? '')
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line, index, arr) => !(line === '' && arr[index - 1] === ''))
+
+  const artifactMatch = text.match(/(?:Building jar:|Built(?:\s+\w+)?:)\s+(.+?\.jar)\b/i)
+    ?? text.match(/((?:target|build|out)\/[^\s'"]+\.jar)\b/i)
+  const artifactPath = artifactMatch?.[1]?.trim()
+  const artifactName = artifactPath ? artifactPath.split('/').pop() : undefined
+  const sizeMatch = text.match(/(?:size|artifact size)\s*[:=]\s*([^\n]+)/i)
+  const durationMs = endedAt && startedAt && endedAt >= startedAt ? endedAt - startedAt : undefined
+  const failed = /BUILD FAILURE|FAILED|Compilation failed|Execution failed/i.test(text) || !!error
+  const success = !failed && /BUILD SUCCESS|BUILD SUCCESSFUL|BUILD SUCCESSFUL in|BUILD FINISHED/i.test(text)
+
+  return {
+    command,
+    status: failed ? 'failed' as const : success ? 'success' as const : 'running' as const,
+    lines,
+    artifactName,
+    artifactPath,
+    artifactSize: sizeMatch?.[1]?.trim(),
+    durationMs,
+    error: error?.trim() || undefined,
+  }
+}
+
+function extractBuildsFromAssistantText(text: string) {
+  const refs: Array<{ type: 'text' | 'build'; id: string }> = []
+  const textSegments: Array<{ id: string; text: string }> = []
+  const builds: Array<{
+    id: string
+    command: string
+    status: 'running' | 'success' | 'failed'
+    lines: string[]
+    artifactName?: string
+    artifactPath?: string
+    artifactSize?: string
+    durationMs?: number
+    error?: string
+  }> = []
+
+  const matches = Array.from(text.matchAll(/\[Run\]\s+([^\n\r]+)/gi))
+  let cursor = 0
+
+  for (let idx = 0; idx < matches.length; idx++) {
+    const match = matches[idx]
+    const start = match.index ?? 0
+    const before = cleanAssistantText(text.slice(cursor, start)).trim()
+    if (before) {
+      const textId = `text-inline-${Date.now()}-${idx}`
+      textSegments.push({ id: textId, text: before })
+      refs.push({ type: 'text', id: textId })
+    }
+
+    const command = String(match[1] ?? '').trim()
+    const segmentEnd = matches[idx + 1]?.index ?? text.length
+    const segment = text.slice(start, segmentEnd)
+    const cleanedSegment = cleanAssistantText(segment)
+    const parsed = parseBuildOutput(command, cleanedSegment)
+    const status = /build completed successfully|build success|✅/i.test(cleanedSegment)
+      ? 'success'
+      : /build failed|build failure|compilation failed|❌|error/i.test(cleanedSegment)
+        ? 'failed'
+        : parsed.status
+    const buildId = `build-inline-${Date.now()}-${idx}`
+    builds.push({
+      id: buildId,
+      command,
+      status,
+      lines: parsed.lines,
+      artifactName: parsed.artifactName,
+      artifactPath: parsed.artifactPath,
+      artifactSize: parsed.artifactSize,
+      durationMs: parsed.durationMs,
+      error: parsed.error,
+    })
+    refs.push({ type: 'build', id: buildId })
+
+    cursor = segmentEnd
+  }
+
+  const tail = cleanAssistantText(text.slice(cursor)).trim()
+  if (tail) {
+    const textId = `text-inline-${Date.now()}-tail`
+    textSegments.push({ id: textId, text: tail })
+    refs.push({ type: 'text', id: textId })
+  }
+
+  return { refs, textSegments, builds }
 }
 
 // ── SSE Connection (one per project directory) ───────────────────────
@@ -333,6 +465,32 @@ class SSEConnection {
         return { sessionId: props.sessionID ?? null, streamEvents: events }
       }
 
+      case 'question.asked': {
+        const props = event.properties as { sessionID?: string; id?: string; question?: string }
+        if (props.id && props.question) {
+          events.push({
+            type: 'question',
+            id: props.id,
+            question: props.question,
+            status: 'running',
+          })
+        }
+        return { sessionId: props.sessionID ?? null, streamEvents: events }
+      }
+
+      case 'question.answered': {
+        const props = event.properties as { sessionID?: string; id?: string }
+        if (props.id) {
+          events.push({
+            type: 'question',
+            id: props.id,
+            question: '',
+            status: 'completed',
+          })
+        }
+        return { sessionId: props.sessionID ?? null, streamEvents: events }
+      }
+
       case 'session.diff': {
         const props = event.properties as {
           sessionID?: string
@@ -365,15 +523,26 @@ class SSEConnection {
         }
         const sessionId = props.info?.sessionID ?? null
         if (props.info?.error) {
-          events.push({ type: 'error', message: props.info.error.data?.message ?? 'Unknown error' })
+          const errorMsg = props.info.error.data?.message ?? 'Unknown error'
+          events.push({ type: 'error', message: errorMsg })
+          // Emit complete after error to stop waiting
+          if (sessionId) {
+            setTimeout(() => this.dispatchToSession(sessionId, { type: 'complete' }), 100)
+          }
         }
         return { sessionId, streamEvents: events }
       }
 
       case 'session.error': {
         const props = event.properties as { sessionID?: string; error?: string }
-        events.push({ type: 'error', message: props.error ?? 'Session error' })
-        return { sessionId: props.sessionID ?? null, streamEvents: events }
+        const errorMsg = props.error ?? 'Session error'
+        events.push({ type: 'error', message: errorMsg })
+        // Emit complete after error to stop waiting
+        const sessionId = props.sessionID ?? null
+        if (sessionId) {
+          setTimeout(() => this.dispatchToSession(sessionId, { type: 'complete' }), 100)
+        }
+        return { sessionId, streamEvents: events }
       }
 
       default:
@@ -452,6 +621,27 @@ class SSEConnection {
     }
   }
 
+  private parseBashCommand(command: string): { action: FileAction; path: string; newPath?: string } | null {
+    const trimmed = command.trim()
+    
+    // Match: rm <file> or rm -rf <file>
+    const rmMatch = trimmed.match(/^rm\s+(?:-[rf]+\s+)?(.+)$/)
+    if (rmMatch) {
+      const path = rmMatch[1].replace(/^['"]|['"]$/g, '').trim()
+      return { action: 'delete', path }
+    }
+    
+    // Match: mv <old> <new>
+    const mvMatch = trimmed.match(/^mv\s+(.+?)\s+(.+)$/)
+    if (mvMatch) {
+      const oldPath = mvMatch[1].replace(/^['"]|['"]$/g, '').trim()
+      const newPath = mvMatch[2].replace(/^['"]|['"]$/g, '').trim()
+      return { action: 'rename', path: oldPath, newPath }
+    }
+    
+    return null
+  }
+
   private transformToolPart(part: OpenCodePart): StreamEvent | null {
     const toolName = (part.tool ?? '').toLowerCase()
     const action = TOOL_TO_FILE_ACTION[toolName]
@@ -464,8 +654,55 @@ class SSEConnection {
     else if (state.status === 'error') status = 'error'
     else status = 'running'
 
+    // Handle question tool specially
+    if (toolName === 'question') {
+      const input = state.input ?? {}
+      return {
+        type: 'question',
+        id: part.callID ?? part.id ?? '',
+        question: String(input.question ?? input.prompt ?? ''),
+        status,
+      }
+    }
+
     if (!action) {
       const input = state.input ?? {}
+      const command = String(input.command ?? '')
+
+      if ((toolName === 'bash' || toolName === 'shell') && isBuildCommand(command)) {
+        const parsed = parseBuildOutput(
+          command,
+          String(state.output ?? ''),
+          state.status === 'error' ? String(state.error ?? state.output ?? '') : undefined,
+          state.time?.end,
+          state.time?.start,
+        )
+        return {
+          type: 'build',
+          id: part.callID ?? part.id ?? '',
+          ...parsed,
+        }
+      }
+      
+      // Parse bash commands for file operations
+      if (toolName === 'bash' || toolName === 'shell') {
+        const parsed = this.parseBashCommand(command)
+        if (parsed) {
+          if (isBuildArtifactPath(parsed.path) || (parsed.newPath && isBuildArtifactPath(parsed.newPath))) {
+            return null
+          }
+          return {
+            type: 'file-op',
+            id: part.callID ?? part.id ?? '',
+            action: parsed.action,
+            path: parsed.path,
+            newPath: parsed.newPath,
+            status,
+            tool: toolName,
+          }
+        }
+      }
+      
       const label = String(input.path ?? input.pattern ?? input.command ?? toolName)
       return {
         type: 'file-op',
@@ -482,7 +719,9 @@ class SSEConnection {
     if (!rawPath) return null
 
     const path = this.makeRelativePath(rawPath)
+    if (isBuildArtifactPath(path)) return null
     const rawNewPath = action === 'rename' ? extractNewPath(input) : undefined
+    if (rawNewPath && isBuildArtifactPath(this.makeRelativePath(rawNewPath))) return null
 
     return {
       type: 'file-op',
@@ -624,7 +863,39 @@ export class OpenCodeBridge implements BridgeInterface {
     }
 
     const session = (await res.json()) as OpenCodeSession
+    
+    // Auto-approve all permissions to prevent tools from getting stuck
+    await this.autoApproveAllPermissions(baseUrl, session.id).catch((err) => {
+      console.warn('[OpenCode] Failed to auto-approve permissions:', err instanceof Error ? err.message : err)
+    })
+    
     return session.id
+  }
+
+  private async autoApproveAllPermissions(baseUrl: string, sessionId: string): Promise<void> {
+    try {
+      // Get all pending permissions
+      const res = await fetch(`${baseUrl}/session/${sessionId}/permissions`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(5000),
+      })
+      
+      if (!res.ok) return
+      
+      const permissions = (await res.json()) as Array<{ id: string }>
+      
+      // Approve each permission with 'always' response
+      for (const perm of permissions) {
+        await fetch(`${baseUrl}/session/${sessionId}/permissions/${perm.id}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ response: 'always' }),
+          signal: AbortSignal.timeout(5000),
+        }).catch(() => {})
+      }
+    } catch {
+      // Ignore errors - permissions might not exist yet
+    }
   }
 
   async sendPromptAsync(baseUrl: string, sessionId: string, prompt: string, model?: string): Promise<void> {
@@ -690,8 +961,18 @@ export class OpenCodeBridge implements BridgeInterface {
       const collectedText: string[] = []
       const thinkingParts = new Map<string, { content: string; done: boolean }>()
       const filePartsById = new Map<string, { action: string; path: string; newPath?: string; tool: string }>()
+      const buildPartsById = new Map<string, {
+        command: string
+        status: 'running' | 'success' | 'failed'
+        lines: string[]
+        artifactName?: string
+        artifactPath?: string
+        artifactSize?: string
+        durationMs?: number
+        error?: string
+      }>()
       const seenParts = new Set<string>()
-      const orderedRefs: Array<{ type: 'thinking' | 'file' | 'tool' | 'text'; id: string }> = []
+      const orderedRefs: Array<{ type: 'thinking' | 'file' | 'tool' | 'text' | 'build'; id: string }> = []
       let latestTodos: TodoItem[] = []
       let resolved = false
 
@@ -722,9 +1003,21 @@ export class OpenCodeBridge implements BridgeInterface {
             case 'thinking': {
               // Capture any pending text as a segment before adding thinking
               if (pendingText.trim()) {
-                const textId = `text-${textSegments.length}`
-                textSegments.push({ id: textId, text: pendingText.trim() })
-                orderedRefs.push({ type: 'text', id: textId })
+                const extracted = extractBuildsFromAssistantText(pendingText.trim())
+                for (const seg of extracted.textSegments) textSegments.push(seg)
+                for (const b of extracted.builds) {
+                  buildPartsById.set(b.id, {
+                    command: b.command,
+                    status: b.status,
+                    lines: b.lines,
+                    artifactName: b.artifactName,
+                    artifactPath: b.artifactPath,
+                    artifactSize: b.artifactSize,
+                    durationMs: b.durationMs,
+                    error: b.error,
+                  })
+                }
+                orderedRefs.push(...extracted.refs)
               }
               pendingText = ''
 
@@ -740,12 +1033,61 @@ export class OpenCodeBridge implements BridgeInterface {
               break
             }
 
+            case 'build': {
+              if (pendingText.trim()) {
+                const extracted = extractBuildsFromAssistantText(pendingText.trim())
+                for (const seg of extracted.textSegments) textSegments.push(seg)
+                for (const b of extracted.builds) {
+                  buildPartsById.set(b.id, {
+                    command: b.command,
+                    status: b.status,
+                    lines: b.lines,
+                    artifactName: b.artifactName,
+                    artifactPath: b.artifactPath,
+                    artifactSize: b.artifactSize,
+                    durationMs: b.durationMs,
+                    error: b.error,
+                  })
+                }
+                orderedRefs.push(...extracted.refs)
+              }
+              pendingText = ''
+
+              buildPartsById.set(event.id, {
+                command: event.command,
+                status: event.status,
+                lines: event.lines,
+                artifactName: event.artifactName,
+                artifactPath: event.artifactPath,
+                artifactSize: event.artifactSize,
+                durationMs: event.durationMs,
+                error: event.error,
+              })
+              if (!seenParts.has(event.id)) {
+                seenParts.add(event.id)
+                orderedRefs.push({ type: 'build', id: event.id })
+              }
+              break
+            }
+
             case 'file-op': {
               // Capture any pending text as a segment before adding file-op
               if (pendingText.trim()) {
-                const textId = `text-${textSegments.length}`
-                textSegments.push({ id: textId, text: pendingText.trim() })
-                orderedRefs.push({ type: 'text', id: textId })
+                const extracted = extractBuildsFromAssistantText(pendingText.trim())
+                for (const seg of extracted.textSegments) textSegments.push(seg)
+                for (const b of extracted.builds) {
+                  buildPartsById.set(b.id, {
+                    command: b.command,
+                    status: b.status,
+                    lines: b.lines,
+                    artifactName: b.artifactName,
+                    artifactPath: b.artifactPath,
+                    artifactSize: b.artifactSize,
+                    durationMs: b.durationMs,
+                    error: b.error,
+                  })
+                }
+                orderedRefs.push(...extracted.refs)
               }
               pendingText = ''
 
@@ -838,6 +1180,28 @@ export class OpenCodeBridge implements BridgeInterface {
       await this.sendPromptAsync(baseUrl, opencodeSessionId, contextPrompt, task.context?.model)
       console.log('[OpenCode] Prompt sent successfully')
 
+      // Initial response timeout - if no events within 30s, likely a rate limit or error
+      let initialTimedOut = false
+      const initialTimeout = setTimeout(() => {
+        if (resolved || controller.signal.aborted) return
+        const elapsed = Date.now() - lastEventTime
+        if (elapsed > 30000) {
+          initialTimedOut = true
+          const errorMsg = 'No response from AI service after 30 seconds. This usually means the service is rate-limited or unavailable. Please try again later or use a different model.'
+          console.error('[OpenCode] Initial response timeout for session:', opencodeSessionId)
+          onEvent({ type: 'error', content: errorMsg, timestamp: new Date().toISOString() })
+          this.subscriptionManager.dispatchError(directory, opencodeSessionId, errorMsg)
+          setTimeout(() => {
+            if (!resolved) {
+              resolved = true
+              timedOut = true
+              this.subscriptionManager.dispatchComplete(directory, opencodeSessionId)
+              onEvent({ type: 'complete', content: 'Timed out', timestamp: new Date().toISOString() })
+            }
+          }, 100)
+        }
+      }, 30000)
+
       // Start permission polling to detect stuck permissions
       const permAbort = new AbortController()
       controller.signal.addEventListener('abort', () => permAbort.abort(), { once: true })
@@ -847,6 +1211,7 @@ export class OpenCodeBridge implements BridgeInterface {
       const progressChecker = setInterval(() => {
         if (resolved || controller.signal.aborted) {
           clearInterval(progressChecker)
+          clearTimeout(initialTimeout)
           return
         }
         const elapsed = Date.now() - lastEventTime
@@ -862,22 +1227,38 @@ export class OpenCodeBridge implements BridgeInterface {
       const pollFallback = this.pollUntilIdle(baseUrl, opencodeSessionId, controller.signal, baselineAssistantCount)
       await Promise.race([completionPromise, pollFallback]).catch(() => {})
       clearInterval(progressChecker)
+      clearTimeout(initialTimeout)
 
       // Stop permission polling once the main stream completes
       permAbort.abort()
 
       // Handle timeout — return failure instead of silently succeeding
-      if (timedOut) {
+      if (timedOut || initialTimedOut) {
         this.subscriptionManager.dispatchComplete(directory, opencodeSessionId)
-        onEvent({ type: 'error', content: 'Session timed out — the AI agent may still be working in the background. You can send a new message to check.', timestamp: new Date().toISOString() })
+        const errorMsg = initialTimedOut 
+          ? 'No response from AI service after 30 seconds. This usually means the service is rate-limited or unavailable.'
+          : 'Session timed out after 30 minutes'
+        onEvent({ type: 'error', content: errorMsg, timestamp: new Date().toISOString() })
         onEvent({ type: 'complete', content: 'Timed out', timestamp: new Date().toISOString() })
         const partialText = await this.fetchAssistantText(baseUrl, opencodeSessionId)
 
         // Flush any remaining pending text into segments
         if (pendingText.trim()) {
-          const textId = `text-${textSegments.length}`
-          textSegments.push({ id: textId, text: pendingText.trim() })
-          orderedRefs.push({ type: 'text', id: textId })
+          const extracted = extractBuildsFromAssistantText(pendingText.trim())
+          for (const seg of extracted.textSegments) textSegments.push(seg)
+          for (const b of extracted.builds) {
+            buildPartsById.set(b.id, {
+              command: b.command,
+              status: b.status,
+              lines: b.lines,
+              artifactName: b.artifactName,
+              artifactPath: b.artifactPath,
+              artifactSize: b.artifactSize,
+              durationMs: b.durationMs,
+              error: b.error,
+            })
+          }
+          orderedRefs.push(...extracted.refs)
           pendingText = ''
         }
 
@@ -890,6 +1271,9 @@ export class OpenCodeBridge implements BridgeInterface {
           } else if (ref.type === 'text') {
             const seg = textSegments.find((s) => s.id === ref.id)
             if (seg) timeoutParts.push({ type: 'text', content: seg.text })
+          } else if (ref.type === 'build') {
+            const build = buildPartsById.get(ref.id)
+            if (build) timeoutParts.push({ type: 'build', id: ref.id, ...build })
           } else {
             const fp = filePartsById.get(ref.id)
             if (fp) {
@@ -909,8 +1293,10 @@ export class OpenCodeBridge implements BridgeInterface {
 
         return {
           success: false,
-          output: partialText || collectedText.join(''),
-          error: 'Session timed out after 30 minutes',
+          output: cleanAssistantText(partialText || collectedText.join('')),
+          error: initialTimedOut 
+            ? 'No response from AI service after 30 seconds. The service may be rate-limited or unavailable.'
+            : 'Session timed out after 30 minutes',
           metadata: {
             opencodeSessionId,
             parts: timeoutParts.length > 0 ? timeoutParts : undefined,
@@ -935,16 +1321,28 @@ export class OpenCodeBridge implements BridgeInterface {
 
       // Fetch full messages from OpenCode for accurate persistence
       const fullText = await this.fetchAssistantText(baseUrl, opencodeSessionId)
-      const outputText = fullText || collectedText.join('')
+      const outputText = cleanAssistantText(fullText || collectedText.join(''))
       console.log('[OpenCode] Stream complete for session:', opencodeSessionId, 'text length:', outputText.length, 'parts:', orderedRefs.length)
 
       onEvent({ type: 'complete', content: 'Done', timestamp: new Date().toISOString() })
 
       // Flush any remaining pending text into segments so the last text block is included in parts
       if (pendingText.trim()) {
-        const textId = `text-${textSegments.length}`
-        textSegments.push({ id: textId, text: pendingText.trim() })
-        orderedRefs.push({ type: 'text', id: textId })
+        const extracted = extractBuildsFromAssistantText(pendingText.trim())
+        for (const seg of extracted.textSegments) textSegments.push(seg)
+        for (const b of extracted.builds) {
+          buildPartsById.set(b.id, {
+            command: b.command,
+            status: b.status,
+            lines: b.lines,
+            artifactName: b.artifactName,
+            artifactPath: b.artifactPath,
+            artifactSize: b.artifactSize,
+            durationMs: b.durationMs,
+            error: b.error,
+          })
+        }
+        orderedRefs.push(...extracted.refs)
         pendingText = ''
       }
 
@@ -957,6 +1355,9 @@ export class OpenCodeBridge implements BridgeInterface {
         } else if (ref.type === 'text') {
           const seg = textSegments.find((s) => s.id === ref.id)
           if (seg) parts.push({ type: 'text', content: seg.text })
+        } else if (ref.type === 'build') {
+          const build = buildPartsById.get(ref.id)
+          if (build) parts.push({ type: 'build', id: ref.id, ...build })
         } else {
           const fp = filePartsById.get(ref.id)
           if (fp) {
@@ -1106,22 +1507,26 @@ export class OpenCodeBridge implements BridgeInterface {
       }
     }
 
-    return textChunks.join('')
+    return cleanAssistantText(textChunks.join(''))
   }
 
   private buildContextPrompt(task: BridgeTask): string {
     const ctx = task.context
-    if (!ctx?.projectName) return task.prompt
-
+    
     const lines: string[] = []
-    lines.push(`[Project: ${ctx.projectName}]`)
-    if (ctx.software) lines.push(`Software: ${ctx.software}`)
-    if (ctx.language) lines.push(`Language: ${ctx.language}`)
-    if (ctx.compiler) lines.push(`Build: ${ctx.compiler}`)
-    if (ctx.javaVersion) lines.push(`Java: ${ctx.javaVersion}`)
-    if (ctx.projectDirectory) lines.push(`Dir: ${ctx.projectDirectory}`)
-    lines.push('')
-    lines.push(`Request: ${task.prompt}`)
+    
+    // Add project context
+    if (ctx?.projectName) {
+      lines.push(`[Project: ${ctx.projectName}]`)
+      if (ctx.software) lines.push(`Software: ${ctx.software}`)
+      if (ctx.language) lines.push(`Language: ${ctx.language}`)
+      if (ctx.compiler) lines.push(`Build: ${ctx.compiler}`)
+      if (ctx.javaVersion) lines.push(`Java: ${ctx.javaVersion}`)
+      if (ctx.projectDirectory) lines.push(`Dir: ${ctx.projectDirectory}`)
+      lines.push('')
+    }
+    
+    lines.push(`${task.prompt}`)
 
     return lines.join('\n')
   }

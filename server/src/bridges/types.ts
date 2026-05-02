@@ -30,6 +30,18 @@ export type MessagePart =
   | { type: 'text'; content: string }
   | { type: 'file'; action: 'create' | 'update' | 'delete' | 'rename' | 'read'; path: string; newPath?: string }
   | { type: 'tool'; tool: string; path: string }
+  | {
+      type: 'build'
+      id: string
+      command: string
+      status: 'running' | 'success' | 'failed'
+      lines: string[]
+      artifactName?: string
+      artifactPath?: string
+      artifactSize?: string
+      durationMs?: number
+      error?: string
+    }
   | { type: 'todo-list'; items: TodoItem[] }
 
 export interface TodoItem {
@@ -64,6 +76,19 @@ export type StreamEvent =
   | { type: 'text-delta'; content: string }
   | { type: 'thinking'; id: string; content: string; done: boolean }
   | { type: 'file-op'; id: string; action: string; path: string; newPath?: string; status: 'running' | 'completed' | 'error'; tool: string }
+  | {
+      type: 'build'
+      id: string
+      command: string
+      status: 'running' | 'success' | 'failed'
+      lines: string[]
+      artifactName?: string
+      artifactPath?: string
+      artifactSize?: string
+      durationMs?: number
+      error?: string
+    }
+  | { type: 'question'; id: string; question: string; status: 'running' | 'completed' | 'error' }
   | { type: 'todo'; items: StreamTodoItem[] }
   | { type: 'status'; status: 'running' | 'idle' | 'error'; message?: string }
   | { type: 'file-change'; file: string }

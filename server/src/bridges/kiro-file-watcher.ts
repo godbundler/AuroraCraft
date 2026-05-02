@@ -10,6 +10,17 @@ export interface FileChangeEvent {
 type OnChangeCallback = (event: FileChangeEvent) => void
 
 const IGNORED_DIRS = new Set(['.git', 'node_modules', '.opencode', '.kiro', '.cache'])
+const BUILD_ARTIFACT_PATTERNS = [
+  /^target\//i,
+  /^build\//i,
+  /^out\//i,
+  /^\.gradle\//i,
+  /^\.mvn\//i,
+  /(?:^|\/)(?:classes|generated|generated-sources|generated-test-sources|tmp|libs|reports|test-results)\//i,
+  /\.(?:class|jar|war|ear|lst|properties|pom|sha1|md5)$/i,
+  /(?:^|\/)(?:createdFiles|inputFiles)\.lst$/i,
+  /(?:^|\/)consumer.*\.pom$/i,
+]
 
 export class KiroFileWatcher {
   private directory: string
@@ -159,6 +170,8 @@ export class KiroFileWatcher {
   }
 
   private recordChange(event: FileChangeEvent): void {
+    if (this.isBuildArtifactPath(event.path)) return
+
     // Deduplicate: if we already have the same type+path, skip
     const isDuplicate = this.changes.some(
       (c) => c.type === event.type && c.path === event.path,
@@ -206,5 +219,10 @@ export class KiroFileWatcher {
   private shouldIgnore(filename: string): boolean {
     const segments = filename.split(/[/\\]/)
     return segments.some((segment) => IGNORED_DIRS.has(segment))
+  }
+
+  private isBuildArtifactPath(filePath: string): boolean {
+    const normalized = filePath.replace(/\\/g, '/').replace(/^\.?\//, '')
+    return BUILD_ARTIFACT_PATTERNS.some((pattern) => pattern.test(normalized))
   }
 }

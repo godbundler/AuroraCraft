@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { eq, and, desc, sql, inArray } from 'drizzle-orm'
 import crypto from 'crypto'
+import { createReadStream } from 'fs'
 import { mkdir, readdir, readFile, writeFile, rm, stat, rename as fsRename } from 'fs/promises'
 import archiver from 'archiver'
 import path from 'path'
@@ -287,8 +288,17 @@ export async function projectRoutes(app: FastifyInstance) {
     if (existing.linkId) {
       const username = request.user!.username
       const projectDir = `/home/auroracraft-${username}/${existing.linkId}`
-      rm(projectDir, { recursive: true, force: true }).catch((err) => {
-        app.log.warn({ err, projectDir }, 'Failed to remove project directory')
+      // Use sudo to delete directory since it's owned by auroracraft-admin
+      import('child_process').then(({ exec }) => {
+        exec(`sudo rm -rf "${projectDir}"`, (err) => {
+          if (err) {
+            app.log.warn({ err, projectDir }, 'Failed to remove project directory')
+          } else {
+            app.log.info({ projectDir }, 'Project directory removed successfully')
+          }
+        })
+      }).catch((err) => {
+        app.log.warn({ err, projectDir }, 'Failed to import child_process')
       })
     }
 
@@ -588,5 +598,50 @@ export async function projectRoutes(app: FastifyInstance) {
     reply.header('Content-Disposition', `attachment; filename="${safeName}.zip"`)
 
     return reply.send(archive)
+  })
+
+  // Download a specific project file
+  app.get('/api/projects/:id/files/download', { preHandler: [authMiddleware] }, async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const { path: filePath } = request.query as { path?: string }
+
+    if (!filePath) {
+      return reply.status(400).send({ message: 'Missing path query parameter', statusCode: 400 })
+    }
+
+    const [project] = await db
+      .select()
+      .from(projects)
+      .where(and(eq(projects.id, id), eq(projects.userId, request.user!.id)))
+      .limit(1)
+
+    if (!project) {
+      return reply.status(404).send({ message: 'Project not found', statusCode: 404 })
+    }
+
+    if (!project.linkId) {
+      return reply.status(404).send({ message: 'Project directory not found', statusCode: 404 })
+    }
+
+    const username = request.user!.username
+    const projectDir = `/home/auroracraft-${username}/${project.linkId}`
+    const fullPath = path.resolve(projectDir, filePath)
+
+    if (!fullPath.startsWith(projectDir + '/')) {
+      return reply.status(403).send({ message: 'Access denied', statusCode: 403 })
+    }
+
+    try {
+      const fileStat = await stat(fullPath)
+      if (!fileStat.isFile()) {
+        return reply.status(400).send({ message: 'Path is not a file', statusCode: 400 })
+      }
+
+      reply.header('Content-Type', 'application/octet-stream')
+      reply.header('Content-Disposition', `attachment; filename="${path.basename(fullPath)}"`)
+      return reply.send(createReadStream(fullPath))
+    } catch {
+      return reply.status(404).send({ message: 'File not found', statusCode: 404 })
+    }
   })
 }

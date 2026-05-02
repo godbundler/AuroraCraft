@@ -111,6 +111,18 @@ export type MessagePart =
   | { type: 'text'; content: string }
   | { type: 'file'; action: 'create' | 'update' | 'delete' | 'rename' | 'read'; path: string; newPath?: string }
   | { type: 'tool'; tool: string; path: string }
+  | {
+      type: 'build'
+      id: string
+      command: string
+      status: 'running' | 'success' | 'failed'
+      lines: string[]
+      artifactName?: string
+      artifactPath?: string
+      artifactSize?: string
+      durationMs?: number
+      error?: string
+    }
   | { type: 'todo-list'; items: TodoItem[] }
 
 export interface TodoItem {
@@ -162,18 +174,23 @@ export interface AIModel {
 }
 
 export const AI_MODELS: AIModel[] = [
-  { id: 'opencode/minimax-m2.5-free', name: 'MiniMax M2.5', provider: 'MiniMax', description: 'Free, fast AI model for coding tasks' },
-  { id: 'opencode/mimo-v2-pro-free', name: 'MiMo V2 Pro', provider: 'Xiaomi', description: 'Free pro model optimized for code generation' },
-  { id: 'opencode/mimo-v2-omni-free', name: 'MiMo V2 Omni', provider: 'Xiaomi', description: 'Free omni model with broad coding capabilities' },
-  { id: 'opencode/nemotron-3-super-free', name: 'Nemotron 3 Super', provider: 'NVIDIA', description: 'Free NVIDIA model with strong reasoning' },
-  { id: 'kiro/auto', name: 'Kiro Auto', provider: 'Kiro', description: 'Models chosen by task for optimal usage and consistent quality' },
-  { id: 'kiro/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', provider: 'Kiro', description: 'The Claude Sonnet 4.5 model' },
-  { id: 'kiro/claude-sonnet-4', name: 'Claude Sonnet 4', provider: 'Kiro', description: 'Hybrid reasoning and coding for regular use' },
-  { id: 'kiro/claude-haiku-4.5', name: 'Claude Haiku 4.5', provider: 'Kiro', description: 'The latest Claude Haiku model' },
-  { id: 'kiro/deepseek-3.2', name: 'DeepSeek 3.2', provider: 'Kiro', description: 'Experimental preview of DeepSeek V3.2' },
-  { id: 'kiro/minimax-m2.1', name: 'MiniMax M2.1', provider: 'Kiro', description: 'Experimental preview of MiniMax M2.1' },
-  { id: 'kiro/minimax-m2.5', name: 'MiniMax M2.5', provider: 'Kiro', description: 'Experimental preview of MiniMax M2.5' },
-  { id: 'kiro/qwen3-coder-next', name: 'Qwen3 Coder Next', provider: 'Kiro', description: 'Experimental preview of Qwen3 Coder Next' },
+  // OpenCode models (via OpenCode free tier)
+  { id: 'opencode/minimax-m2.5-free', name: 'MiniMax M2.5', provider: 'OpenCode', description: 'Free AI model for coding tasks' },
+  
+  // Kiro CLI models (via Kiro.dev)
+  { id: 'kiro/auto', name: 'Kiro Auto', provider: 'Kiro', description: 'Optimal model routing for best quality-to-cost ratio' },
+  { id: 'kiro/claude-opus-4.7', name: 'Claude Opus 4.7', provider: 'Kiro', description: 'Latest Opus with stronger agentic coding and 3x higher resolution vision (experimental)' },
+  { id: 'kiro/claude-opus-4.6', name: 'Claude Opus 4.6', provider: 'Kiro', description: 'Most capable model for complex multi-system problems' },
+  { id: 'kiro/claude-opus-4.5', name: 'Claude Opus 4.5', provider: 'Kiro', description: 'Maximum reasoning depth for large codebases' },
+  { id: 'kiro/claude-sonnet-4.6', name: 'Claude Sonnet 4.6', provider: 'Kiro', description: 'Near-Opus intelligence with better token efficiency' },
+  { id: 'kiro/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', provider: 'Kiro', description: 'Strong agentic coding with extended autonomous operation' },
+  { id: 'kiro/claude-sonnet-4.0', name: 'Claude Sonnet 4.0', provider: 'Kiro', description: 'Consistent baseline with predictable behavior' },
+  { id: 'kiro/claude-haiku-4.5', name: 'Claude Haiku 4.5', provider: 'Kiro', description: 'Near-frontier intelligence at fraction of cost' },
+  { id: 'kiro/minimax-m2.5', name: 'MiniMax M2.5', provider: 'Kiro', description: 'Frontier coding at low cost (experimental)' },
+  { id: 'kiro/glm-5', name: 'GLM-5', provider: 'Kiro', description: '200K context for repo-scale agentic work (experimental)' },
+  { id: 'kiro/deepseek-3.2', name: 'DeepSeek 3.2', provider: 'Kiro', description: 'Agentic workflows at minimal cost (experimental)' },
+  { id: 'kiro/minimax-m2.1', name: 'MiniMax M2.1', provider: 'Kiro', description: 'Multilingual programming and UI generation (experimental)' },
+  { id: 'kiro/qwen3-coder-next', name: 'Qwen3 Coder Next', provider: 'Kiro', description: '256K context, most cost-effective option (experimental)' },
 ]
 
 export const DEFAULT_MODEL_ID = AI_MODELS[0].id
@@ -184,6 +201,19 @@ export type StreamEvent =
   | { type: 'text-delta'; content: string }
   | { type: 'thinking'; id: string; content: string; done: boolean }
   | { type: 'file-op'; id: string; action: string; path: string; newPath?: string; status: 'running' | 'completed' | 'error'; tool: string }
+  | { type: 'question'; id: string; question: string; status: 'running' | 'completed' | 'error' }
+  | {
+      type: 'build'
+      id: string
+      command: string
+      status: 'running' | 'success' | 'failed'
+      lines: string[]
+      artifactName?: string
+      artifactPath?: string
+      artifactSize?: string
+      durationMs?: number
+      error?: string
+    }
   | { type: 'todo'; items: StreamTodoItem[] }
   | { type: 'status'; status: string; message?: string }
   | { type: 'file-change'; file: string }
@@ -225,7 +255,7 @@ export interface FileOpBlock {
 
 export interface StreamingItem {
   id: string
-  kind: 'thinking' | 'file-op' | 'text'
+  kind: 'thinking' | 'file-op' | 'text' | 'question' | 'build'
   order: number
   // For thinking
   thinkingContent?: string
@@ -238,6 +268,18 @@ export interface StreamingItem {
   fileTool?: string
   // For text
   textContent?: string
+  // For question
+  questionText?: string
+  questionStatus?: 'running' | 'completed' | 'error'
+  // For build
+  buildCommand?: string
+  buildStatus?: 'running' | 'success' | 'failed'
+  buildLines?: string[]
+  buildArtifactName?: string
+  buildArtifactPath?: string
+  buildArtifactSize?: string
+  buildDurationMs?: number
+  buildError?: string
 }
 
 export interface StreamingState {

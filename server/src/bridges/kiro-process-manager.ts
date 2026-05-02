@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'child_process'
+import { spawn, type ChildProcess, execFileSync } from 'child_process'
 import { Readable } from 'stream'
 
 interface KiroExecution {
@@ -22,10 +22,22 @@ export class KiroProcessManager {
     signal?: AbortSignal,
     model?: string,
   ): KiroExecution {
+    console.log(`[KiroProcess] execute() called with directory: ${directory}`)
     const sessionId = crypto.randomUUID()
     const escapedPrompt = escapeForSingleQuotes(prompt)
     const systemUser = `auroracraft-${username}`
     const homeDir = `/home/${systemUser}`
+
+    // Create directory if it doesn't exist - MUST happen before file watcher starts
+    try {
+      console.log(`[KiroProcess] Creating directory: ${directory}`)
+      execFileSync('sudo', ['mkdir', '-p', directory], { stdio: 'pipe' })
+      execFileSync('sudo', ['chown', '-R', `${systemUser}:${systemUser}`, directory], { stdio: 'pipe' })
+      console.log(`[KiroProcess] Directory created and chowned: ${directory}`)
+    } catch (err: any) {
+      console.error(`[KiroProcess] Failed to create/chown ${directory}:`, err.message)
+      if (err.stderr) console.error(`[KiroProcess] stderr:`, err.stderr.toString())
+    }
 
     const modelFlag = model ? ` --model '${escapeForSingleQuotes(model)}'` : ''
     const kiroCmd = `kiro-cli chat --no-interactive --trust-all-tools${modelFlag} '${escapedPrompt}'`
@@ -33,16 +45,9 @@ export class KiroProcessManager {
 
     console.log(`[KiroProcess] Spawning kiro-cli for session ${sessionId} (user: ${systemUser}, dir: ${directory})`)
 
-    const child = spawn('runuser', ['-l', systemUser, '-c', command], {
+    const child = spawn('sudo', ['runuser', '-l', systemUser, '-c', command], {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,
-      env: {
-        ...process.env,
-        HOME: homeDir,
-        PATH: process.env.PATH,
-        COLUMNS: '9999',
-        TERM: 'dumb',
-      },
     })
 
     this.processes.set(sessionId, child)

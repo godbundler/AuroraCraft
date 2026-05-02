@@ -412,6 +412,48 @@ export async function agentRoutes(app: FastifyInstance) {
     return updated
   })
 
+  // Answer a question
+  app.post('/api/projects/:projectId/agent/sessions/:sessionId/answer', { preHandler: [authMiddleware] }, async (request, reply) => {
+    const { projectId, sessionId } = request.params as { projectId: string; sessionId: string }
+    const { questionId, answer } = request.body as { questionId: string; answer: string }
+
+    const project = await verifyProjectOwnership(request.user!.id, projectId)
+    if (!project) {
+      return reply.status(404).send({ message: 'Project not found', statusCode: 404 })
+    }
+
+    const [session] = await db
+      .select()
+      .from(agentSessions)
+      .where(and(eq(agentSessions.id, sessionId), eq(agentSessions.projectId, projectId)))
+      .limit(1)
+
+    if (!session) {
+      return reply.status(404).send({ message: 'Session not found', statusCode: 404 })
+    }
+
+    const opencodeSessionId = session.opencodeSessionId ?? undefined
+    if (!opencodeSessionId) {
+      return reply.status(400).send({ message: 'No OpenCode session found', statusCode: 400 })
+    }
+
+    const directory = getProjectDirectory(request.user!.username, project.linkId)
+    const url = await processManager.acquire(directory)
+
+    try {
+      await fetch(`${url}/session/${opencodeSessionId}/question/${questionId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ answer }),
+      })
+      return { success: true }
+    } catch (error) {
+      return reply.status(500).send({ message: 'Failed to answer question', statusCode: 500 })
+    } finally {
+      await processManager.release(directory)
+    }
+  })
+
   // Get logs for a session
   app.get('/api/projects/:projectId/agent/sessions/:sessionId/logs', { preHandler: [authMiddleware] }, async (request, reply) => {
     const { projectId, sessionId } = request.params as { projectId: string; sessionId: string }

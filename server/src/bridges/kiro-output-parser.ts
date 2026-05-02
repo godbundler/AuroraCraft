@@ -2,7 +2,7 @@ import type { MessagePart } from './types.js'
 
 // ── ANSI escape code stripping ───────────────────────────────────────
 
-const ANSI_RE = /\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b\([A-Z]|\r/g
+const ANSI_RE = /\x1B\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\x1b\([A-Z]|\r/g
 
 export function stripAnsi(input: string): string {
   return input.replace(ANSI_RE, '')
@@ -12,6 +12,20 @@ export function stripAnsi(input: string): string {
 
 const THINKING_BLOCK_RE = /<thinking>([\s\S]*?)<\/thinking>/gi
 const REASONING_BLOCK_RE = /<reasoning>([\s\S]*?)<\/reasoning>/gi
+const ACTION_TAG_INLINE_RE = /(\s*)\[(Created|Updated|Read|Deleted|Renamed)\]\s+([^\s`"']+|`[^`]+`)/g
+const ORPHAN_ANSI_RE = /(?:^|[\s.])\[[0-9;]{1,20}m/g
+
+function normalizeAssistantText(text: string): string {
+  return text
+    .replace(ACTION_TAG_INLINE_RE, (_m, ws) => ws || ' ')
+    .replace(/\[Run\]\s+[^\n]*/g, '')
+    .replace(ORPHAN_ANSI_RE, ' ')
+    .replace(/(\S)\s+(#{2,6}\s)/g, '$1\n\n$2')
+    .replace(/(#{2,6})([A-Za-z])/g, '$1 $2')
+    .replace(/Files:-/g, 'Files:\n- ')
+    .replace(/^\s*\[Run\]\s+.*$/gim, '')
+    .replace(/\n{3,}/g, '\n\n')
+}
 
 // ── Kiro CLI output helpers ───────────────────────────────────────────
 
@@ -60,9 +74,10 @@ function extractResponseText(rawOutput: string): string {
   for (const line of lines) {
     const trimmed = line.trim()
 
-    if (trimmed.startsWith('> ') || trimmed === '>') {
+      if (trimmed.startsWith('> ') || trimmed === '>') {
       if (!currentChunk) currentChunk = []
-      currentChunk.push(trimmed.length > 2 ? trimmed.slice(2) : '')
+      const content = trimmed.length > 2 ? trimmed.slice(2) : ''
+      currentChunk.push(normalizeAssistantText(content))
       continue
     }
 
@@ -75,7 +90,7 @@ function extractResponseText(rawOutput: string): string {
     }
 
     if (currentChunk !== null) {
-      currentChunk.push(trimmed)
+      currentChunk.push(normalizeAssistantText(trimmed))
     }
   }
 

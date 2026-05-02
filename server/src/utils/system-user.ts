@@ -39,6 +39,13 @@ export async function createSystemUser(username: string, password: string): Prom
     throw err
   }
 
+  // Set proper permissions on home directory (750 = owner rwx, group r-x, others ---)
+  try {
+    await execFileAsync('sudo', ['chmod', '750', `/home/${systemUsername}`])
+  } catch (err) {
+    console.warn(`[SystemUser] Failed to set permissions on /home/${systemUsername}:`, err)
+  }
+
   console.log(`[SystemUser] System user ${systemUsername} created successfully`)
 }
 
