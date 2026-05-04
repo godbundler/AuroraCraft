@@ -364,6 +364,8 @@ export class KiroBridge implements BridgeInterface {
 
       console.log('[KiroBridge] Execution completed for session:', task.sessionId, 'output length:', outputText.length, 'parts:', parts.length)
 
+      // Small delay to ensure all events are flushed to SSE clients before completing
+      await new Promise(resolve => setTimeout(resolve, 100))
 
       sessionEventBus.emitComplete(task.sessionId)
       onEvent({ type: 'complete', content: 'Done', timestamp: new Date().toISOString() })
