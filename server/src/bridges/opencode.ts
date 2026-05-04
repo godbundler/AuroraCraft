@@ -1,5 +1,7 @@
 import type { BridgeInterface, BridgeTask, BridgeResult, BridgeStreamEvent, MessagePart, TodoItem, StreamEvent } from './types.js'
 import { processManager } from './opencode-process-manager.js'
+import { existsSync } from 'fs'
+import { join } from 'path'
 
 // No default model override — let OpenCode use its configured default
 
@@ -70,7 +72,6 @@ const TOOL_TO_FILE_ACTION: Record<string, FileAction> = {
   read: 'read', file_read: 'read', cat: 'read', read_file: 'read', readFile: 'read',
 }
 
-const BUILD_COMMAND_RE = /(^|\s)(?:\.\/)?(?:mvn|mvnw|gradle|gradlew)(?:\s|$)/i
 const BUILD_ARTIFACT_RE = [
   /^target\//i,
   /^build\//i,
@@ -89,10 +90,6 @@ function extractFilePath(input: Record<string, unknown>): string {
 
 function extractNewPath(input: Record<string, unknown>): string {
   return String(input.new_path ?? input.newFilePath ?? input.destination ?? input.target ?? input.newPath ?? '')
-}
-
-function isBuildCommand(command: string): boolean {
-  return BUILD_COMMAND_RE.test(command.trim())
 }
 
 function isBuildArtifactPath(filePath: string): boolean {
@@ -115,99 +112,6 @@ function cleanAssistantText(text: string): string {
     .replace(/^\s*\[(Created|Updated|Read|Deleted|Renamed)\]\s+.*$/gim, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
-}
-
-function parseBuildOutput(command: string, output: string, error?: string, endedAt?: number, startedAt?: number) {
-  const text = String(output ?? '')
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trimEnd())
-    .filter((line, index, arr) => !(line === '' && arr[index - 1] === ''))
-
-  const artifactMatch = text.match(/(?:Building jar:|Built(?:\s+\w+)?:)\s+(.+?\.jar)\b/i)
-    ?? text.match(/((?:target|build|out)\/[^\s'"]+\.jar)\b/i)
-  const artifactPath = artifactMatch?.[1]?.trim()
-  const artifactName = artifactPath ? artifactPath.split('/').pop() : undefined
-  const sizeMatch = text.match(/(?:size|artifact size)\s*[:=]\s*([^\n]+)/i)
-  const durationMs = endedAt && startedAt && endedAt >= startedAt ? endedAt - startedAt : undefined
-  const failed = /BUILD FAILURE|FAILED|Compilation failed|Execution failed/i.test(text) || !!error
-  const success = !failed && /BUILD SUCCESS|BUILD SUCCESSFUL|BUILD SUCCESSFUL in|BUILD FINISHED/i.test(text)
-
-  return {
-    command,
-    status: failed ? 'failed' as const : success ? 'success' as const : 'running' as const,
-    lines,
-    artifactName,
-    artifactPath,
-    artifactSize: sizeMatch?.[1]?.trim(),
-    durationMs,
-    error: error?.trim() || undefined,
-  }
-}
-
-function extractBuildsFromAssistantText(text: string) {
-  const refs: Array<{ type: 'text' | 'build'; id: string }> = []
-  const textSegments: Array<{ id: string; text: string }> = []
-  const builds: Array<{
-    id: string
-    command: string
-    status: 'running' | 'success' | 'failed'
-    lines: string[]
-    artifactName?: string
-    artifactPath?: string
-    artifactSize?: string
-    durationMs?: number
-    error?: string
-  }> = []
-
-  const matches = Array.from(text.matchAll(/\[Run\]\s+([^\n\r]+)/gi))
-  let cursor = 0
-
-  for (let idx = 0; idx < matches.length; idx++) {
-    const match = matches[idx]
-    const start = match.index ?? 0
-    const before = cleanAssistantText(text.slice(cursor, start)).trim()
-    if (before) {
-      const textId = `text-inline-${Date.now()}-${idx}`
-      textSegments.push({ id: textId, text: before })
-      refs.push({ type: 'text', id: textId })
-    }
-
-    const command = String(match[1] ?? '').trim()
-    const segmentEnd = matches[idx + 1]?.index ?? text.length
-    const segment = text.slice(start, segmentEnd)
-    const cleanedSegment = cleanAssistantText(segment)
-    const parsed = parseBuildOutput(command, cleanedSegment)
-    const status = /build completed successfully|build success|✅/i.test(cleanedSegment)
-      ? 'success'
-      : /build failed|build failure|compilation failed|❌|error/i.test(cleanedSegment)
-        ? 'failed'
-        : parsed.status
-    const buildId = `build-inline-${Date.now()}-${idx}`
-    builds.push({
-      id: buildId,
-      command,
-      status,
-      lines: parsed.lines,
-      artifactName: parsed.artifactName,
-      artifactPath: parsed.artifactPath,
-      artifactSize: parsed.artifactSize,
-      durationMs: parsed.durationMs,
-      error: parsed.error,
-    })
-    refs.push({ type: 'build', id: buildId })
-
-    cursor = segmentEnd
-  }
-
-  const tail = cleanAssistantText(text.slice(cursor)).trim()
-  if (tail) {
-    const textId = `text-inline-${Date.now()}-tail`
-    textSegments.push({ id: textId, text: tail })
-    refs.push({ type: 'text', id: textId })
-  }
-
-  return { refs, textSegments, builds }
 }
 
 // ── SSE Connection (one per project directory) ───────────────────────
@@ -249,10 +153,10 @@ class SSEConnection {
       this.listeners.set(sessionId, set)
     }
     set.add(callback)
-
-    // Replay any buffered events that arrived before this listener subscribed
+    // Late-joining browser tabs (reload mid-run): replay buffered deltas so UI unfreezes.
+    // 'complete' is never buffered, so reconnecting clients still get a live terminal signal.
     const buffered = this.eventBuffer.get(sessionId)
-    if (buffered && buffered.length > 0) {
+    if (buffered?.length) {
       for (const event of buffered) {
         callback(event)
       }
@@ -595,6 +499,8 @@ class SSEConnection {
     this.cancelIdleComplete(sessionId)
     console.log('[OpenCode] Dispatching complete for session:', sessionId)
     this.dispatchToSession(sessionId, { type: 'complete' })
+    // Clear buffer after dispatching complete to prevent replay on reconnect
+    this.eventBuffer.delete(sessionId)
   }
 
   dispatchError(sessionId: string, message: string) {
@@ -644,7 +550,7 @@ class SSEConnection {
 
   private transformToolPart(part: OpenCodePart): StreamEvent | null {
     const toolName = (part.tool ?? '').toLowerCase()
-    const action = TOOL_TO_FILE_ACTION[toolName]
+    let action = TOOL_TO_FILE_ACTION[toolName]
 
     const state = part.state
     if (!state) return null
@@ -669,20 +575,6 @@ class SSEConnection {
       const input = state.input ?? {}
       const command = String(input.command ?? '')
 
-      if ((toolName === 'bash' || toolName === 'shell') && isBuildCommand(command)) {
-        const parsed = parseBuildOutput(
-          command,
-          String(state.output ?? ''),
-          state.status === 'error' ? String(state.error ?? state.output ?? '') : undefined,
-          state.time?.end,
-          state.time?.start,
-        )
-        return {
-          type: 'build',
-          id: part.callID ?? part.id ?? '',
-          ...parsed,
-        }
-      }
       
       // Parse bash commands for file operations
       if (toolName === 'bash' || toolName === 'shell') {
@@ -722,6 +614,16 @@ class SSEConnection {
     if (isBuildArtifactPath(path)) return null
     const rawNewPath = action === 'rename' ? extractNewPath(input) : undefined
     if (rawNewPath && isBuildArtifactPath(this.makeRelativePath(rawNewPath))) return null
+
+    // Bug Fix 1: Check if file exists to determine create vs update
+    // ONLY check when tool is still running (before file is written)
+    // Once completed, the file will exist regardless of whether it was created or updated
+    if (action === 'create' && status === 'running') {
+      const fullPath = join(this.directory, path)
+      if (existsSync(fullPath)) {
+        action = 'update'
+      }
+    }
 
     return {
       type: 'file-op',
@@ -961,18 +863,8 @@ export class OpenCodeBridge implements BridgeInterface {
       const collectedText: string[] = []
       const thinkingParts = new Map<string, { content: string; done: boolean }>()
       const filePartsById = new Map<string, { action: string; path: string; newPath?: string; tool: string }>()
-      const buildPartsById = new Map<string, {
-        command: string
-        status: 'running' | 'success' | 'failed'
-        lines: string[]
-        artifactName?: string
-        artifactPath?: string
-        artifactSize?: string
-        durationMs?: number
-        error?: string
-      }>()
       const seenParts = new Set<string>()
-      const orderedRefs: Array<{ type: 'thinking' | 'file' | 'tool' | 'text' | 'build'; id: string }> = []
+      const orderedRefs: Array<{ type: 'thinking' | 'file' | 'tool' | 'text'; id: string }> = []
       let latestTodos: TodoItem[] = []
       let resolved = false
 
@@ -1003,21 +895,9 @@ export class OpenCodeBridge implements BridgeInterface {
             case 'thinking': {
               // Capture any pending text as a segment before adding thinking
               if (pendingText.trim()) {
-                const extracted = extractBuildsFromAssistantText(pendingText.trim())
-                for (const seg of extracted.textSegments) textSegments.push(seg)
-                for (const b of extracted.builds) {
-                  buildPartsById.set(b.id, {
-                    command: b.command,
-                    status: b.status,
-                    lines: b.lines,
-                    artifactName: b.artifactName,
-                    artifactPath: b.artifactPath,
-                    artifactSize: b.artifactSize,
-                    durationMs: b.durationMs,
-                    error: b.error,
-                  })
-                }
-                orderedRefs.push(...extracted.refs)
+                const textId = `text-${Date.now()}`
+                textSegments.push({ id: textId, text: cleanAssistantText(pendingText.trim()) })
+                orderedRefs.push({ type: 'text', id: textId })
               }
               pendingText = ''
 
@@ -1033,61 +913,12 @@ export class OpenCodeBridge implements BridgeInterface {
               break
             }
 
-            case 'build': {
-              if (pendingText.trim()) {
-                const extracted = extractBuildsFromAssistantText(pendingText.trim())
-                for (const seg of extracted.textSegments) textSegments.push(seg)
-                for (const b of extracted.builds) {
-                  buildPartsById.set(b.id, {
-                    command: b.command,
-                    status: b.status,
-                    lines: b.lines,
-                    artifactName: b.artifactName,
-                    artifactPath: b.artifactPath,
-                    artifactSize: b.artifactSize,
-                    durationMs: b.durationMs,
-                    error: b.error,
-                  })
-                }
-                orderedRefs.push(...extracted.refs)
-              }
-              pendingText = ''
-
-              buildPartsById.set(event.id, {
-                command: event.command,
-                status: event.status,
-                lines: event.lines,
-                artifactName: event.artifactName,
-                artifactPath: event.artifactPath,
-                artifactSize: event.artifactSize,
-                durationMs: event.durationMs,
-                error: event.error,
-              })
-              if (!seenParts.has(event.id)) {
-                seenParts.add(event.id)
-                orderedRefs.push({ type: 'build', id: event.id })
-              }
-              break
-            }
-
             case 'file-op': {
               // Capture any pending text as a segment before adding file-op
               if (pendingText.trim()) {
-                const extracted = extractBuildsFromAssistantText(pendingText.trim())
-                for (const seg of extracted.textSegments) textSegments.push(seg)
-                for (const b of extracted.builds) {
-                  buildPartsById.set(b.id, {
-                    command: b.command,
-                    status: b.status,
-                    lines: b.lines,
-                    artifactName: b.artifactName,
-                    artifactPath: b.artifactPath,
-                    artifactSize: b.artifactSize,
-                    durationMs: b.durationMs,
-                    error: b.error,
-                  })
-                }
-                orderedRefs.push(...extracted.refs)
+                const textId = `text-${Date.now()}`
+                textSegments.push({ id: textId, text: cleanAssistantText(pendingText.trim()) })
+                orderedRefs.push({ type: 'text', id: textId })
               }
               pendingText = ''
 
@@ -1244,21 +1075,9 @@ export class OpenCodeBridge implements BridgeInterface {
 
         // Flush any remaining pending text into segments
         if (pendingText.trim()) {
-          const extracted = extractBuildsFromAssistantText(pendingText.trim())
-          for (const seg of extracted.textSegments) textSegments.push(seg)
-          for (const b of extracted.builds) {
-            buildPartsById.set(b.id, {
-              command: b.command,
-              status: b.status,
-              lines: b.lines,
-              artifactName: b.artifactName,
-              artifactPath: b.artifactPath,
-              artifactSize: b.artifactSize,
-              durationMs: b.durationMs,
-              error: b.error,
-            })
-          }
-          orderedRefs.push(...extracted.refs)
+          const textId = `text-${Date.now()}`
+          textSegments.push({ id: textId, text: cleanAssistantText(pendingText.trim()) })
+          orderedRefs.push({ type: 'text', id: textId })
           pendingText = ''
         }
 
@@ -1271,9 +1090,6 @@ export class OpenCodeBridge implements BridgeInterface {
           } else if (ref.type === 'text') {
             const seg = textSegments.find((s) => s.id === ref.id)
             if (seg) timeoutParts.push({ type: 'text', content: seg.text })
-          } else if (ref.type === 'build') {
-            const build = buildPartsById.get(ref.id)
-            if (build) timeoutParts.push({ type: 'build', id: ref.id, ...build })
           } else {
             const fp = filePartsById.get(ref.id)
             if (fp) {
@@ -1328,21 +1144,9 @@ export class OpenCodeBridge implements BridgeInterface {
 
       // Flush any remaining pending text into segments so the last text block is included in parts
       if (pendingText.trim()) {
-        const extracted = extractBuildsFromAssistantText(pendingText.trim())
-        for (const seg of extracted.textSegments) textSegments.push(seg)
-        for (const b of extracted.builds) {
-          buildPartsById.set(b.id, {
-            command: b.command,
-            status: b.status,
-            lines: b.lines,
-            artifactName: b.artifactName,
-            artifactPath: b.artifactPath,
-            artifactSize: b.artifactSize,
-            durationMs: b.durationMs,
-            error: b.error,
-          })
-        }
-        orderedRefs.push(...extracted.refs)
+        const textId = `text-${Date.now()}`
+        textSegments.push({ id: textId, text: cleanAssistantText(pendingText.trim()) })
+        orderedRefs.push({ type: 'text', id: textId })
         pendingText = ''
       }
 
@@ -1355,9 +1159,6 @@ export class OpenCodeBridge implements BridgeInterface {
         } else if (ref.type === 'text') {
           const seg = textSegments.find((s) => s.id === ref.id)
           if (seg) parts.push({ type: 'text', content: seg.text })
-        } else if (ref.type === 'build') {
-          const build = buildPartsById.get(ref.id)
-          if (build) parts.push({ type: 'build', id: ref.id, ...build })
         } else {
           const fp = filePartsById.get(ref.id)
           if (fp) {

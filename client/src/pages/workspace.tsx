@@ -81,75 +81,6 @@ function removeLeakedBadgeText(content: string): string {
     .trim()
 }
 
-function formatBuildDuration(durationMs?: number): string | null {
-  if (!durationMs || durationMs <= 0) return null
-  if (durationMs < 1000) return `${durationMs}ms`
-  if (durationMs < 60_000) return `${(durationMs / 1000).toFixed(1)}s`
-  const minutes = Math.floor(durationMs / 60_000)
-  const seconds = Math.round((durationMs % 60_000) / 1000)
-  return `${minutes}m ${seconds}s`
-}
-
-function extractBuildErrorText(lines: string[], explicitError?: string): string {
-  if (explicitError?.trim()) return explicitError.trim()
-  const errorLine = lines.find((line) => /error|failed|exception/i.test(line))
-  return errorLine?.trim() ?? 'Build failed with errors'
-}
-
-function sanitizeTerminalLine(line: string): string {
-  if (!line) return ''
-  return line
-    .replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '')
-    .replace(/(?:^|[\s.])\[[0-9;]{1,20}m/g, ' ')
-    .trimEnd()
-}
-
-function inferBuildFromText(content: string, idPrefix: string): RenderBlock[] {
-  const runMatch = content.match(/\[Run\]\s+([^\n\r]+)/i)
-  if (!runMatch) return [{ kind: 'text', id: `${idPrefix}-text`, content }]
-
-  const full = removeLeakedBadgeText(content)
-  const runRe = /\[Run\]\s+([^\n\r]+)/i
-  const runAgain = full.match(runRe)
-  if (!runAgain) return [{ kind: 'text', id: `${idPrefix}-text`, content: full }]
-
-  const command = runAgain[1].trim()
-  const start = runAgain.index ?? 0
-  const before = full.slice(0, start).trim()
-  const after = full.slice(start + runAgain[0].length).trim()
-  const status: 'running' | 'success' | 'failed' =
-    /build completed successfully|build success|BUILD SUCCESS|✅/i.test(after)
-      ? 'success'
-      : /build failed|build failure|compilation failed|error|❌|BUILD FAILURE/i.test(after)
-        ? 'failed'
-        : 'running'
-
-  const lines = after
-    .split(/\r?\n/)
-    .map((l) => sanitizeTerminalLine(l))
-    .filter(Boolean)
-    .slice(-400)
-
-  const blocks: RenderBlock[] = []
-  if (before) blocks.push({ kind: 'text', id: `${idPrefix}-before`, content: before })
-  blocks.push({
-    kind: 'build',
-    id: `${idPrefix}-build`,
-    build: {
-      type: 'build',
-      id: `${idPrefix}-build`,
-      command,
-      status,
-      lines,
-      artifactName: lines.join('\n').match(/([A-Za-z0-9._-]+\.jar)\b/)?.[1],
-      artifactPath: lines.join('\n').match(/((?:target|build|out)\/[^\s'"]+\.jar)\b/i)?.[1],
-      artifactSize: lines.join('\n').match(/(?:size|artifact size)\s*[:=]\s*([^\n]+)/i)?.[1]?.trim(),
-      error: status === 'failed' ? extractBuildErrorText(lines) : undefined,
-    },
-  })
-  return blocks
-}
-
 // ── Markdown renderer ────────────────────────────────────────────────
 
 function MarkdownContent({ content }: { content: string }) {
@@ -280,11 +211,15 @@ function FileOpBadge({ part, onFileSelect }: { part: Extract<MessagePart, { type
   const Icon = config.icon
   const filename = part.path.split('/').pop() ?? part.path
   const isClickable = part.action !== 'delete' && onFileSelect
+  
+  // Bug Fix 2: For renamed badges, use newPath for navigation
+  const pathToOpen = part.action === 'rename' && part.newPath ? part.newPath : part.path
+  
   const Wrapper = isClickable ? 'button' : 'div'
 
   return (
     <Wrapper
-      {...(isClickable ? { onClick: () => onFileSelect(part.path), type: 'button' as const } : {})}
+      {...(isClickable ? { onClick: () => onFileSelect(pathToOpen), type: 'button' as const } : {})}
       className={cn(
         'inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs',
         config.color,
@@ -546,252 +481,22 @@ function StreamingQuestionBadge({ question, onAnswer }: {
   )
 }
 
-function BuildPanel({ build, projectId }: {
-  build: Extract<MessagePart, { type: 'build' }> | {
-    id: string
-    command: string
-    status: 'running' | 'success' | 'failed'
-    lines: string[]
-    artifactName?: string
-    artifactPath?: string
-    artifactSize?: string
-    durationMs?: number
-    error?: string
-  }
-  projectId: string
-}) {
-  const storageKey = `auroracraft-build-panel:${build.id}`
-  const defaultOpen = build.status === 'running'
-  const [open, setOpen] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return defaultOpen
-    try {
-      const raw = window.localStorage.getItem(storageKey)
-      if (!raw) return defaultOpen
-      const parsed = JSON.parse(raw) as { open?: boolean }
-      return parsed.open ?? defaultOpen
-    } catch {
-      return defaultOpen
-    }
-  })
-  const [userInteracted, setUserInteracted] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false
-    try {
-      const raw = window.localStorage.getItem(storageKey)
-      if (!raw) return false
-      const parsed = JSON.parse(raw) as { userInteracted?: boolean }
-      return parsed.userInteracted ?? false
-    } catch {
-      return false
-    }
-  })
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    try {
-      const raw = window.localStorage.getItem(storageKey)
-      const parsed = raw ? JSON.parse(raw) as { collapseAt?: number; userInteracted?: boolean } : {}
-      const next = { ...parsed, open, userInteracted }
-      window.localStorage.setItem(storageKey, JSON.stringify(next))
-    } catch {
-      // ignore storage failures
-    }
-  }, [open, userInteracted, storageKey])
-
-  useEffect(() => {
-    if (build.status === 'running' || !open || userInteracted || typeof window === 'undefined') return
-    let collapseAt = Date.now() + 20_000
-    try {
-      const raw = window.localStorage.getItem(storageKey)
-      const parsed = raw ? JSON.parse(raw) as { open?: boolean; collapseAt?: number; userInteracted?: boolean } : {}
-      if (parsed.collapseAt && parsed.collapseAt > Date.now()) {
-        collapseAt = parsed.collapseAt
-      } else {
-        window.localStorage.setItem(storageKey, JSON.stringify({ open, collapseAt, userInteracted }))
-      }
-    } catch {
-      // ignore storage failures
-    }
-
-    const remaining = Math.max(collapseAt - Date.now(), 0)
-    const timer = window.setTimeout(() => {
-      setOpen(false)
-      try {
-        window.localStorage.setItem(storageKey, JSON.stringify({ open: false, collapseAt, userInteracted: false }))
-      } catch {
-        // ignore storage failures
-      }
-    }, remaining)
-    return () => window.clearTimeout(timer)
-  }, [build.status, open, userInteracted, storageKey])
-
-  const lines = (build.lines ?? []).map((line) => sanitizeTerminalLine(line)).filter(Boolean)
-  const errorText = extractBuildErrorText(lines, build.error)
-  const durationText = formatBuildDuration(build.durationMs)
-  const statusTone = build.status === 'running'
-    ? 'text-warning border-warning/20 bg-warning/10'
-    : build.status === 'success'
-      ? 'text-success border-success/20 bg-success/10'
-      : 'text-destructive border-destructive/20 bg-destructive/10'
-  const statusLabel = build.status === 'running' ? 'RUNNING' : build.status === 'success' ? 'SUCCESS' : 'FAILED'
-  const downloadHref = build.artifactPath
-    ? `/api/projects/${projectId}/files/download?path=${encodeURIComponent(build.artifactPath)}`
-    : null
-
-  if (!open) {
-    return (
-      <button
-        type="button"
-        onClick={() => { setOpen(true); setUserInteracted(true) }}
-        className={cn('flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-xs font-mono', statusTone)}
-      >
-        <ChevronRight className="h-3 w-3" />
-        <Cpu className="h-3.5 w-3.5" />
-        <span className="font-medium">build</span>
-        <span className="ml-auto">{statusLabel} ▼</span>
-      </button>
-    )
-  }
-
-  return (
-    <div className={cn(
-      'rounded-xl border bg-[#0b0f1a] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]',
-      build.status === 'running'
-        ? 'border-[#1f355f]'
-        : build.status === 'success'
-          ? 'border-success/40'
-          : 'border-destructive/40'
-    )}>
-      <button
-        type="button"
-        onClick={() => { setOpen(false); setUserInteracted(true) }}
-        className="flex w-full items-center gap-2 border-b border-white/10 px-3 py-2 text-xs text-text-muted hover:text-text"
-      >
-        <span className="flex items-center gap-1.5">
-          <span className="h-2.5 w-2.5 rounded-full bg-[#ff5f56]" />
-          <span className="h-2.5 w-2.5 rounded-full bg-[#ffbd2e]" />
-          <span className="h-2.5 w-2.5 rounded-full bg-[#27c93f]" />
-        </span>
-        <ChevronDown className="h-3 w-3" />
-        <span className="font-mono text-xs text-text-muted">build</span>
-        <span className={cn(
-          'ml-auto rounded px-2 py-0.5 font-mono text-[10px] tracking-wide',
-          build.status === 'running'
-            ? 'bg-primary/20 text-primary'
-            : build.status === 'success'
-              ? 'bg-success/20 text-success'
-              : 'bg-destructive/20 text-destructive'
-        )}>
-          {build.status === 'running' ? '● RUNNING' : build.status === 'success' ? '✓ SUCCESS' : '✕ FAILED'}
-        </span>
-      </button>
-      <div className="space-y-3 px-3 py-3 font-mono">
-        <div className="rounded-md bg-black/35 px-3 py-2 text-xs text-text-muted">
-          $ {build.command}
-        </div>
-
-        {build.status === 'running' && (
-          <div className="space-y-2">
-            <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
-              <div className="h-full w-1/2 animate-[pulse_1.2s_ease-in-out_infinite] rounded-full bg-primary" />
-            </div>
-          </div>
-        )}
-
-        <div className="max-h-56 overflow-y-auto rounded-md border border-white/10 bg-black/35 px-3 py-2 text-xs text-text-muted">
-          {lines.length > 0 ? (
-            <div className="space-y-1">
-              {lines.map((line, idx) => (
-                <div key={`${build.id}-${idx}`} className="whitespace-pre-wrap break-words">
-                  <span className="text-text-dim">&gt;</span> {line || ' '}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="text-text-dim">Waiting for build output...</div>
-          )}
-        </div>
-
-        {build.status === 'success' && (
-          <div className="space-y-1 rounded-md border border-success/30 bg-success/10 px-3 py-2 text-xs text-success">
-            <div>Build completed successfully</div>
-            {build.artifactName && <div>artifact: {build.artifactName}</div>}
-            {build.artifactSize && <div>size: {build.artifactSize}</div>}
-            {durationText && <div>time: {durationText}</div>}
-          </div>
-        )}
-
-        {build.status === 'failed' && (
-          <div className="space-y-1 rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-            <div>Build failed with errors</div>
-            <div className="whitespace-pre-wrap break-words">{errorText}</div>
-          </div>
-        )}
-
-        <div className="flex gap-2">
-          {build.status === 'success' && downloadHref && (
-            <a
-              href={downloadHref}
-              download
-              className="inline-flex items-center rounded-md bg-success px-3 py-1.5 text-xs font-medium text-black hover:brightness-95"
-            >
-              ⬇ Download {build.artifactName ?? 'artifact'}
-            </a>
-          )}
-          {build.status === 'failed' && (
-            <button
-              type="button"
-              onClick={() => navigator.clipboard.writeText(errorText).catch(() => {})}
-              className="inline-flex items-center rounded-md border border-white/20 bg-surface-hover px-3 py-1.5 text-xs font-medium text-text-muted hover:text-text"
-            >
-              📋 Copy Error
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
 type RenderBlock =
   | { kind: 'thinking'; id: string; content: string; done: boolean }
   | { kind: 'text'; id: string; content: string }
   | { kind: 'question'; id: string; questionText: string; questionStatus: 'running' | 'completed' | 'error' }
-  | { kind: 'build'; id: string; build: Extract<MessagePart, { type: 'build' }> }
   | { kind: 'file-group'; id: string; ops: Array<{ id: string; action: string; path: string; newPath?: string; status: 'running' | 'completed' | 'error'; tool: string }> }
 
 function buildRenderBlocksFromStreaming(items: StreamingItem[]): RenderBlock[] {
   const blocks: RenderBlock[] = []
-  const hasStructuredBuild = items.some((item) => item.kind === 'build')
 
   for (const item of items) {
     if (item.kind === 'thinking') {
       blocks.push({ kind: 'thinking', id: item.id, content: item.thinkingContent ?? '', done: item.thinkingDone ?? false })
     } else if (item.kind === 'text') {
-      const content = item.textContent ?? ''
-      if (!hasStructuredBuild && /\[Run\]\s+/i.test(content)) {
-        blocks.push(...inferBuildFromText(content, item.id))
-      } else {
-        blocks.push({ kind: 'text', id: item.id, content })
-      }
+      blocks.push({ kind: 'text', id: item.id, content: item.textContent ?? '' })
     } else if (item.kind === 'question' && item.questionText && item.questionStatus) {
       blocks.push({ kind: 'question', id: item.id, questionText: item.questionText, questionStatus: item.questionStatus })
-    } else if (item.kind === 'build' && item.buildCommand && item.buildStatus) {
-      blocks.push({
-        kind: 'build',
-        id: item.id,
-        build: {
-          type: 'build',
-          id: item.id,
-          command: item.buildCommand,
-          status: item.buildStatus,
-          lines: item.buildLines ?? [],
-          artifactName: item.buildArtifactName,
-          artifactPath: item.buildArtifactPath,
-          artifactSize: item.buildArtifactSize,
-          durationMs: item.buildDurationMs,
-          error: item.buildError,
-        },
-      })
     } else if (item.kind === 'file-op' && item.fileAction && item.filePath && item.fileStatus && item.fileTool) {
       // Don't group - keep each file-op in its original position
       blocks.push({ 
@@ -807,6 +512,7 @@ function buildRenderBlocksFromStreaming(items: StreamingItem[]): RenderBlock[] {
         }]
       })
     }
+    // Build terminal feature removed - ignore build items
   }
 
   return blocks
@@ -816,20 +522,13 @@ function buildRenderBlocksFromMetadata(metadata?: MessageMetadata | null): { blo
   const blocks: RenderBlock[] = []
   let todos: TodoItem[] = []
   const parts = Array.isArray(metadata?.parts) ? metadata.parts : []
-  const hasStructuredBuild = parts.some((part) => part.type === 'build')
 
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i]
     if (part.type === 'thinking') {
       blocks.push({ kind: 'thinking', id: `thinking-${i}`, content: part.content, done: true })
     } else if (part.type === 'text') {
-      if (!hasStructuredBuild && /\[Run\]\s+/i.test(part.content)) {
-        blocks.push(...inferBuildFromText(part.content, `text-${i}`))
-      } else {
-        blocks.push({ kind: 'text', id: `text-${i}`, content: part.content })
-      }
-    } else if (part.type === 'build') {
-      blocks.push({ kind: 'build', id: part.id, build: part })
+      blocks.push({ kind: 'text', id: `text-${i}`, content: part.content })
     } else if (part.type === 'file') {
       // Don't group - keep each file-op in its original position
       blocks.push({ 
@@ -859,17 +558,17 @@ function buildRenderBlocksFromMetadata(metadata?: MessageMetadata | null): { blo
     } else if (part.type === 'todo-list') {
       todos = part.items
     }
+    // Build terminal feature removed - ignore build parts
   }
 
   return { blocks, todos }
 }
 
-function RenderMessageBlocks({ blocks, todos, onAnswer, onFileSelect, projectId }: {
+function RenderMessageBlocks({ blocks, todos, onAnswer, onFileSelect }: {
   blocks: RenderBlock[]
   todos?: TodoItem[] | StreamTodoItem[]
   onAnswer?: (questionId: string, answer: string) => Promise<void>
   onFileSelect?: (path: string) => void
-  projectId: string
 }) {
   return (
     <div className="space-y-2">
@@ -882,9 +581,6 @@ function RenderMessageBlocks({ blocks, todos, onAnswer, onFileSelect, projectId 
           return item.done
             ? <ThinkingBadge key={item.id} content={item.content} />
             : <StreamingThinkingBadge key={item.id} block={{ id: item.id, content: item.content, done: item.done, order: idx }} />
-        }
-        if (item.kind === 'build') {
-          return <BuildPanel key={item.id} build={item.build} projectId={projectId} />
         }
         if (item.kind === 'file-group') {
           return (
@@ -925,10 +621,9 @@ function RenderMessageBlocks({ blocks, todos, onAnswer, onFileSelect, projectId 
 
 // ── Streaming message (live agent response) ──────────────────────────
 
-function StreamingMessage({ state, onAnswer, projectId }: { 
+function StreamingMessage({ state, onAnswer }: { 
   state: StreamingState
   onAnswer?: (questionId: string, answer: string) => Promise<void>
-  projectId: string
 }) {
   const renderedItems = buildRenderBlocksFromStreaming(state.items)
 
@@ -941,7 +636,7 @@ function StreamingMessage({ state, onAnswer, projectId }: {
         <p className="text-xs font-medium text-text-muted">AI Agent</p>
 
         {renderedItems.length > 0 || state.todos.length > 0 ? (
-          <RenderMessageBlocks blocks={renderedItems} todos={state.todos} onAnswer={onAnswer} projectId={projectId} />
+          <RenderMessageBlocks blocks={renderedItems} todos={state.todos} onAnswer={onAnswer} />
         ) : (
           <div className="flex items-center gap-2 pt-1">
             <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
@@ -955,11 +650,11 @@ function StreamingMessage({ state, onAnswer, projectId }: {
 
 // ── Message content (persisted messages) ─────────────────────────────
 
-function MessageContent({ message, onFileSelect, projectId }: { message: AgentMessage; onFileSelect?: (path: string) => void; projectId: string }) {
+function MessageContent({ message, onFileSelect }: { message: AgentMessage; onFileSelect?: (path: string) => void }) {
   const { blocks, todos } = buildRenderBlocksFromMetadata(message.metadata)
 
   if (blocks.length > 0 || todos.length > 0) {
-    return <div className="mt-0.5"><RenderMessageBlocks blocks={blocks} todos={todos} onFileSelect={onFileSelect} projectId={projectId} /></div>
+    return <div className="mt-0.5"><RenderMessageBlocks blocks={blocks} todos={todos} onFileSelect={onFileSelect} /></div>
   }
 
   return <div className="mt-0.5">{message.content && <MarkdownContent content={message.content} />}</div>
@@ -1212,8 +907,19 @@ function ChatSession({ projectId, sessionId, pendingMessage, onPendingMessageSen
 }) {
   const { session, messages, isLoading, sendMessage, isSending, sendError, invalidateAndRefetch, cancelSession, isCancelling } = useAgentSession(projectId, sessionId)
   const [awaitingStream, setAwaitingStream] = useState(false)
-  const streamActive = !!projectId && !!sessionId && (!session || session.status === 'idle' || session.status === 'running' || awaitingStream)
-  const { streamingState, isConnected, resetStream } = useStreamingAgent(projectId, sessionId, streamActive)
+  // Wait for session snapshot so we don't open SSE against a terminal session while `session` is still undefined.
+  const streamActive =
+    !!projectId
+    && !!sessionId
+    && !isLoading
+    && !!session
+    && (session.status === 'idle' || session.status === 'running' || awaitingStream)
+  const { streamingState, isConnected, resetStream } = useStreamingAgent(
+    projectId,
+    sessionId,
+    streamActive,
+    session?.status ?? null,
+  )
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const pendingSentRef = useRef(false)
   const prevFileChangesRef = useRef(0)
@@ -1291,11 +997,12 @@ function ChatSession({ projectId, sessionId, pendingMessage, onPendingMessageSen
   messagesLenRef.current = messages.length
 
   // Initialize from loaded messages (handles page reload with existing session)
+  // Set to current message count UNLESS we're actively awaiting a new stream
   useEffect(() => {
-    if (messages.length > 0 && streamStartMessageCountRef.current === 0) {
+    if (messages.length > 0 && streamStartMessageCountRef.current === 0 && !awaitingStream) {
       streamStartMessageCountRef.current = messages.length
     }
-  }, [messages.length])
+  }, [messages.length, awaitingStream])
 
   // Refetch final messages when session completes
   useEffect(() => {
@@ -1344,11 +1051,17 @@ function ChatSession({ projectId, sessionId, pendingMessage, onPendingMessageSen
       ? (messages.slice(streamStartMessageCountRef.current).find(m => m.role === 'agent') ?? null)
       : null
 
-  // Keep a single "virtual agent message" bubble in the DOM to avoid layout shifts.
-  // Once a persisted agent message arrives, render it inside the same bubble and
-  // hide that persisted message from the list (so we never swap/duplicate).
-  const showVirtualAgentMessage = awaitingStream || session?.status === 'running' || streamHasContent || !!handoffAgentMessage
-  const messagesToRender = handoffAgentMessage ? messages.filter((m) => m.id !== handoffAgentMessage.id) : messages
+  const sessionIsTerminal =
+    session?.status === 'completed' || session?.status === 'failed' || session?.status === 'cancelled'
+  const showStreamingShell =
+    !sessionIsTerminal &&
+    !handoffAgentMessage &&
+    (awaitingStream || session?.status === 'running' || streamHasContent)
+
+  const messagesToRender =
+    handoffAgentMessage ? messages.filter((m) => m.id !== handoffAgentMessage.id) : messages
+
+  const showVirtualAgentMessage = !!handoffAgentMessage || showStreamingShell
 
   return (
     <>
@@ -1384,28 +1097,27 @@ function ChatSession({ projectId, sessionId, pendingMessage, onPendingMessageSen
                     {msg.role === 'user' ? 'You' : msg.role === 'system' ? 'System' : 'AI Agent'}
                   </p>
                   <div className={cn(msg.role === 'user' && 'w-full')}>
-                    <MessageContent message={msg} onFileSelect={onFileSelect} projectId={projectId} />
+                    <MessageContent message={msg} onFileSelect={onFileSelect} />
                   </div>
                 </div>
               </div>
             ))}
 
-            {showVirtualAgentMessage && (
-              handoffAgentMessage ? (
-                <div className="flex gap-2.5">
-                  <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-surface-hover">
-                    <Bot className="h-3.5 w-3.5 text-text-muted" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-medium text-text-muted">AI Agent</p>
-                    <div className="mt-0.5">
-                      <MessageContent message={handoffAgentMessage} onFileSelect={onFileSelect} projectId={projectId} />
-                    </div>
+            {handoffAgentMessage && (
+              <div className="flex gap-2.5">
+                <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-surface-hover">
+                  <Bot className="h-3.5 w-3.5 text-text-muted" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-medium text-text-muted">AI Agent</p>
+                  <div className="mt-0.5">
+                    <MessageContent message={handoffAgentMessage} onFileSelect={onFileSelect} />
                   </div>
                 </div>
-              ) : (
-                <StreamingMessage state={streamingState} onAnswer={handleAnswer} projectId={projectId} />
-              )
+              </div>
+            )}
+            {!handoffAgentMessage && showStreamingShell && (
+              <StreamingMessage state={streamingState} onAnswer={handleAnswer} />
             )}
 
             <div ref={messagesEndRef} />

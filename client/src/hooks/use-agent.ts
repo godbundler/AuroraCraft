@@ -272,41 +272,6 @@ function processStreamEvent(acc: StreamAccumulator, event: StreamEvent): void {
       break
     }
 
-    case 'build': {
-      if (!acc.isStreaming && !acc.activeStream) {
-        acc.isStreaming = true
-        acc.activeStream = true
-      }
-      const existing = acc.itemById.get(event.id)
-      if (existing && existing.kind === 'build') {
-        existing.buildCommand = event.command
-        existing.buildStatus = event.status
-        existing.buildLines = event.lines
-        existing.buildArtifactName = event.artifactName
-        existing.buildArtifactPath = event.artifactPath
-        existing.buildArtifactSize = event.artifactSize
-        existing.buildDurationMs = event.durationMs
-        existing.buildError = event.error
-      } else {
-        const item: StreamingItem = {
-          id: event.id,
-          kind: 'build',
-          order: acc.nextOrder++,
-          buildCommand: event.command,
-          buildStatus: event.status,
-          buildLines: event.lines,
-          buildArtifactName: event.artifactName,
-          buildArtifactPath: event.artifactPath,
-          buildArtifactSize: event.artifactSize,
-          buildDurationMs: event.durationMs,
-          buildError: event.error,
-        }
-        acc.items.push(item)
-        acc.itemById.set(item.id, item)
-      }
-      break
-    }
-
     case 'todo':
       acc.todos = event.items
       break
@@ -353,7 +318,13 @@ function processStreamEvent(acc: StreamAccumulator, event: StreamEvent): void {
   }
 }
 
-export function useStreamingAgent(projectId: string, sessionId: string, isActive: boolean) {
+/** Streams live deltas; SSE buffer replay clears duplicate risk by resetting accumulators on connect. */
+export function useStreamingAgent(
+  projectId: string,
+  sessionId: string,
+  isActive: boolean,
+  sessionStatus?: AgentSession['status'] | null,
+) {
   const accRef = useRef<StreamAccumulator>(createEmptyAccumulator())
   const dirtyRef = useRef(false)
   const eventSourceRef = useRef<EventSource | null>(null)
@@ -363,15 +334,36 @@ export function useStreamingAgent(projectId: string, sessionId: string, isActive
 
   useEffect(() => {
     if (!projectId || !sessionId) return
+    accRef.current = createEmptyAccumulator()
+    dirtyRef.current = false
+    setSnapshot(EMPTY_STREAMING_STATE)
     try {
-      const raw = window.localStorage.getItem(storageKey)
-      if (!raw) return
-      const parsed = JSON.parse(raw) as StreamingState
-      setSnapshot(parsed)
+      window.localStorage.removeItem(storageKey)
     } catch {
-      // ignore storage parse errors
+      // ignore
     }
   }, [projectId, sessionId, storageKey])
+
+  const clearStreamStorageAndAcc = useCallback(() => {
+    accRef.current = createEmptyAccumulator()
+    dirtyRef.current = false
+    try {
+      window.localStorage.removeItem(storageKey)
+    } catch {
+      // ignore storage failures
+    }
+  }, [storageKey])
+
+  // Persisted chats only: never hydrate stream overlays from disk (those rows duplicate agent messages).
+  useEffect(() => {
+    if (!projectId || !sessionId) return
+    const terminal =
+      sessionStatus === 'completed' || sessionStatus === 'failed' || sessionStatus === 'cancelled'
+    if (terminal) {
+      clearStreamStorageAndAcc()
+      setSnapshot(EMPTY_STREAMING_STATE)
+    }
+  }, [projectId, sessionId, sessionStatus, clearStreamStorageAndAcc])
 
   // Periodic state sync (batches rapid events into ~60fps renders for smooth streaming)
   useEffect(() => {
@@ -406,6 +398,16 @@ export function useStreamingAgent(projectId: string, sessionId: string, isActive
 
     es.onopen = () => {
       setIsConnected(true)
+      // Server replays buffered OpenCode events per connection; wiping local accumulator avoids
+      // doubling content that was persisted in localStorage before refresh.
+      setSnapshot(EMPTY_STREAMING_STATE)
+      accRef.current = createEmptyAccumulator()
+      dirtyRef.current = true
+      try {
+        window.localStorage.removeItem(storageKey)
+      } catch {
+        // ignore storage failures
+      }
     }
 
     es.onmessage = (e) => {
@@ -428,7 +430,7 @@ export function useStreamingAgent(projectId: string, sessionId: string, isActive
       eventSourceRef.current = null
       setIsConnected(false)
     }
-  }, [projectId, sessionId, isActive])
+  }, [projectId, sessionId, isActive, storageKey])
 
   const resetStream = useCallback(() => {
     accRef.current = createEmptyAccumulator()

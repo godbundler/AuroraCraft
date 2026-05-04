@@ -155,7 +155,6 @@ export class KiroBridge implements BridgeInterface {
       const contextPrompt = this.buildContextPrompt(task)
       const orderedParts: MessagePart[] = []
       let pendingText = ''
-      let buildPartIndex: number | null = null
 
       const flushPendingText = () => {
         const cleaned = normalizeAssistantText(pendingText).trim()
@@ -231,79 +230,6 @@ export class KiroBridge implements BridgeInterface {
       const reader = execution.stdout.getReader()
       const decoder = new TextDecoder()
       const filter = new KiroStreamFilter()
-      let activeBuildId: string | null = null
-      const buildLines: string[] = []
-      let buildCommand = ''
-      let buildStartTime = 0
-      let buildBuffer = ''
-      type BuildSummary = {
-        id: string
-        command: string
-        status: 'running' | 'success' | 'failed'
-        lines: string[]
-        artifactName?: string
-        artifactPath?: string
-        durationMs?: number
-        error?: string
-      }
-      let lastBuildSummary: BuildSummary | null = null
-      let lastBuildEmitAt = 0
-
-      const detectBuildCommand = (text: string): string | null => {
-        const runMatch = text.match(/\[Run\]\s+([^\n\r]+)/i)
-        if (runMatch?.[1]) return runMatch[1].trim()
-        const dollarMatch = text.match(/^\$\s+(.+)$/m)
-        if (dollarMatch?.[1]) return dollarMatch[1].trim()
-        return null
-      }
-
-      const isBuildCommand = (command: string): boolean => {
-        return /(^|\s)(?:\.\/)?(?:mvn|mvnw|gradle|gradlew)(?:\s|$)/i.test(command)
-      }
-
-      const extractArtifact = (allLines: string[]) => {
-        const joined = allLines.join('\n')
-        const artifactMatch =
-          joined.match(/Building jar:\s+(.+?\.jar)\b/i)
-          ?? joined.match(/((?:target|build|out)\/[^\s'"]+\.jar)\b/i)
-        const artifactPath = artifactMatch?.[1]?.trim()
-        const artifactName = artifactPath ? artifactPath.split('/').pop() : undefined
-        return { artifactPath, artifactName }
-      }
-
-      const emitBuild = (status: BuildSummary['status'], extra?: Partial<BuildSummary>) => {
-        if (!activeBuildId) return
-        const now = Date.now()
-        if (status === 'running' && now - lastBuildEmitAt < 200) return
-        lastBuildEmitAt = now
-        const durationMs = buildStartTime ? now - buildStartTime : undefined
-        const { artifactName, artifactPath } = extractArtifact(buildLines)
-        const payload: BuildSummary = {
-          id: activeBuildId,
-          command: buildCommand,
-          status,
-          lines: [...buildLines].slice(-400),
-          artifactName,
-          artifactPath,
-          durationMs,
-          ...(extra ?? {}),
-        }
-        sessionEventBus.emit(task.sessionId, { type: 'build', ...payload })
-        lastBuildSummary = payload
-        if (buildPartIndex !== null && orderedParts[buildPartIndex]?.type === 'build') {
-          orderedParts[buildPartIndex] = {
-            type: 'build',
-            id: payload.id,
-            command: payload.command,
-            status: payload.status,
-            lines: payload.lines,
-            artifactName: payload.artifactName,
-            artifactPath: payload.artifactPath,
-            durationMs: payload.durationMs,
-            error: payload.error,
-          }
-        }
-      }
 
       try {
         while (true) {
@@ -314,61 +240,6 @@ export class KiroBridge implements BridgeInterface {
           const chunk = stripAnsi(decoder.decode(value, { stream: true }))
           if (!chunk) continue
           collectedOutput.push(chunk)
-
-          // Detect build command (matches screenshots: "[Run] mvn package")
-          if (!activeBuildId) {
-            const maybeCmd = detectBuildCommand(chunk)
-            if (maybeCmd && isBuildCommand(maybeCmd)) {
-              flushPendingText()
-              activeBuildId = `build-${task.sessionId}-${Date.now()}`
-              buildCommand = maybeCmd
-              buildLines.length = 0
-              buildStartTime = Date.now()
-              buildBuffer = ''
-              orderedParts.push({
-                type: 'build',
-                id: activeBuildId,
-                command: buildCommand,
-                status: 'running',
-                lines: [],
-              })
-              buildPartIndex = orderedParts.length - 1
-              emitBuild('running', { lines: [] })
-            }
-          }
-
-          // If we are in a build, collect stdout lines and emit incremental updates.
-          if (activeBuildId) {
-            buildBuffer += chunk
-            const lines = buildBuffer.split(/\r?\n/)
-            buildBuffer = lines.pop() ?? ''
-
-            for (const line of lines) {
-              const trimmedLine = line.trimEnd()
-              if (!trimmedLine) continue
-
-              // Keep typical build output lines only (avoid tokenized LLM output)
-              if (
-                /^\[(?:INFO|WARNING|ERROR|DEBUG)\]/.test(trimmedLine)
-                || /BUILD (?:SUCCESS|FAILURE|SUCCESSFUL|FAILED)/i.test(trimmedLine)
-                || /Downloading|Downloaded|Compiling|Building|Executing|Tests run|FAILURE|SUCCESS/i.test(trimmedLine)
-              ) {
-                buildLines.push(trimmedLine)
-                if (buildLines.length > 600) buildLines.splice(0, buildLines.length - 600)
-                emitBuild('running')
-              }
-
-              if (/BUILD SUCCESS|BUILD SUCCESSFUL|build completed successfully/i.test(trimmedLine)) {
-                emitBuild('success')
-                activeBuildId = null
-                buildPartIndex = null
-              } else if (/BUILD FAILURE|BUILD FAILED|Compilation failed/i.test(trimmedLine)) {
-                emitBuild('failed', { error: trimmedLine })
-                activeBuildId = null
-                buildPartIndex = null
-              }
-            }
-          }
 
           const filtered = filter.processChunk(chunk)
           if (filtered) {
@@ -457,22 +328,6 @@ export class KiroBridge implements BridgeInterface {
       const thinkingParts = parsedParts.filter((p) => p.type === 'thinking')
       const parts: MessagePart[] = [...thinkingParts, ...orderedParts]
 
-      // Fallback: if build was tracked but not inserted into ordered parts for any reason.
-      if (lastBuildSummary && !parts.some((p) => p.type === 'build')) {
-        const b = lastBuildSummary as BuildSummary
-        parts.push({
-          type: 'build',
-          id: b.id,
-          command: b.command,
-          status: b.status,
-          lines: b.lines,
-          artifactName: b.artifactName,
-          artifactPath: b.artifactPath,
-          durationMs: b.durationMs,
-          error: b.error,
-        })
-      }
-
       // Add file changes that weren't already tracked (excluding build artifacts)
       for (const change of fileChanges) {
         if (this.isBuildArtifact(change.path)) continue
@@ -495,12 +350,6 @@ export class KiroBridge implements BridgeInterface {
       if (exitCode !== 0 && exitCode !== null) {
         const errorMsg = stderrOutput.trim() || `Kiro CLI exited with code ${exitCode}`
         console.error('[KiroBridge] Process failed:', errorMsg)
-        // If a build was in progress but never emitted a terminal status, mark it failed.
-        if (activeBuildId) {
-          emitBuild('failed', { error: errorMsg })
-          activeBuildId = null
-          buildPartIndex = null
-        }
         sessionEventBus.emitError(task.sessionId, errorMsg)
         onEvent({ type: 'error', content: errorMsg, timestamp: new Date().toISOString() })
         sessionEventBus.emitComplete(task.sessionId)
@@ -515,12 +364,6 @@ export class KiroBridge implements BridgeInterface {
 
       console.log('[KiroBridge] Execution completed for session:', task.sessionId, 'output length:', outputText.length, 'parts:', parts.length)
 
-      // If a build was in progress but never emitted a terminal status, mark it success.
-      if (activeBuildId) {
-        emitBuild('success')
-        activeBuildId = null
-        buildPartIndex = null
-      }
 
       sessionEventBus.emitComplete(task.sessionId)
       onEvent({ type: 'complete', content: 'Done', timestamp: new Date().toISOString() })
