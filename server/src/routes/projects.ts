@@ -278,8 +278,26 @@ export async function projectRoutes(app: FastifyInstance) {
     const projectDir = `/home/auroracraft-${username}/${linkId}`
     try {
       await mkdir(projectDir, { recursive: true })
+      
+      // Initialize git repository
+      const { exec } = await import('child_process')
+      const { promisify } = await import('util')
+      const execAsync = promisify(exec)
+      
+      await execAsync(`cd "${projectDir}" && git init && git config user.name "${username}" && git config user.email "${request.user!.email}"`)
+      
+      // Create initial commit with empty .gitkeep
+      await execAsync(`cd "${projectDir}" && touch .gitkeep && git add .gitkeep && git commit -m "Initial commit"`)
+      
+      // Fix ownership
+      await execAsync(`chown -R auroracraft-${username}:auroracraft-${username} "${projectDir}"`)
+      
+      // Add to safe.directory for the user
+      await execAsync(`su - auroracraft-${username} -c "git config --global --add safe.directory '${projectDir}'"`)
+      
+      app.log.info({ projectDir }, 'Initialized git repository for blank project')
     } catch (err) {
-      app.log.warn({ err, projectDir }, 'Failed to create project directory')
+      app.log.warn({ err, projectDir }, 'Failed to create project directory or initialize git')
     }
 
     return reply.status(201).send(project)

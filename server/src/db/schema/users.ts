@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, pgEnum, timestamp, text } from 'drizzle-orm/pg-core'
+import { pgTable, uuid, varchar, pgEnum, timestamp, text, boolean } from 'drizzle-orm/pg-core'
 
 export const roleEnum = pgEnum('user_role', ['user', 'admin'])
 
@@ -11,6 +11,9 @@ export const users = pgTable('users', {
   githubAccessToken: text('github_access_token'),
   githubUsername: varchar('github_username', { length: 255 }),
   githubConnectedAt: timestamp('github_connected_at', { withTimezone: true }),
+  coderabbitEnabled: boolean('coderabbit_enabled').default(false),
+  coderabbitGrantedBy: uuid('coderabbit_granted_by').references(() => users.id),
+  coderabbitGrantedAt: timestamp('coderabbit_granted_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 })

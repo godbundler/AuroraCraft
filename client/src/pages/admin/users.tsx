@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Loader2, CheckCircle2, XCircle, Terminal } from 'lucide-react'
+import { Loader2, CheckCircle2, XCircle, Terminal, Shield } from 'lucide-react'
 import { useAdminUsers } from '@/hooks/use-admin'
 import { api } from '@/lib/api'
 import type { KiroAuthStatus } from '@/types'
@@ -54,7 +54,76 @@ function KiroAuthButton({ userId }: { userId: string }) {
 }
 
 export default function AdminUsersPage() {
-  const { users, isLoading } = useAdminUsers()
+  const { users, isLoading, refetch } = useAdminUsers()
+  const [grantModalOpen, setGrantModalOpen] = useState(false)
+  const [selectedUser, setSelectedUser] = useState<{ id: string; username: string } | null>(null)
+  const [loginUrl, setLoginUrl] = useState('')
+  const [token, setToken] = useState('')
+  const [initiating, setInitiating] = useState(false)
+  const [completing, setCompleting] = useState(false)
+
+  const handleInitiate = async () => {
+    if (!selectedUser) return
+    setInitiating(true)
+    try {
+      const res = await fetch(`/api/admin/users/${selectedUser.id}/coderabbit/initiate`, {
+        method: 'POST',
+        credentials: 'include',
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setLoginUrl(data.loginUrl)
+      } else {
+        const data = await res.json()
+        alert(data.error || 'Failed to initiate login')
+      }
+    } catch (err) {
+      alert('Failed to initiate login')
+    } finally {
+      setInitiating(false)
+    }
+  }
+
+  const handleComplete = async () => {
+    if (!selectedUser || !token.trim()) return
+    setCompleting(true)
+    try {
+      const res = await fetch(`/api/admin/users/${selectedUser.id}/coderabbit/complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ token: token.trim() }),
+      })
+      if (res.ok) {
+        setGrantModalOpen(false)
+        setLoginUrl('')
+        setToken('')
+        setSelectedUser(null)
+        refetch()
+        alert('CodeRabbit access granted!')
+      } else {
+        const data = await res.json()
+        alert(data.error || 'Failed to complete login')
+      }
+    } catch (err) {
+      alert('Failed to complete login')
+    } finally {
+      setCompleting(false)
+    }
+  }
+
+  const handleRevoke = async (userId: string) => {
+    if (!confirm('Revoke CodeRabbit access for this user?')) return
+    try {
+      await fetch(`/api/admin/users/${userId}/coderabbit/revoke`, {
+        method: 'POST',
+        credentials: 'include',
+      })
+      refetch()
+    } catch (err) {
+      alert('Failed to revoke access')
+    }
+  }
 
   return (
     <div>
@@ -77,6 +146,7 @@ export default function AdminUsersPage() {
                 <th className="px-4 py-3 text-left font-medium text-text-muted">Username</th>
                 <th className="px-4 py-3 text-left font-medium text-text-muted">Email</th>
                 <th className="px-4 py-3 text-left font-medium text-text-muted">Role</th>
+                <th className="px-4 py-3 text-left font-medium text-text-muted">CodeRabbit</th>
                 <th className="px-4 py-3 text-left font-medium text-text-muted">Joined</th>
                 <th className="px-4 py-3 text-left font-medium text-text-muted">Actions</th>
               </tr>
@@ -95,6 +165,32 @@ export default function AdminUsersPage() {
                       {user.role}
                     </span>
                   </td>
+                  <td className="px-4 py-3">
+                    {user.coderabbitEnabled ? (
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex items-center gap-1 text-xs text-success">
+                          <Shield className="h-3 w-3" />
+                          Enabled
+                        </span>
+                        <button
+                          onClick={() => handleRevoke(user.id)}
+                          className="text-xs text-red-500 hover:underline"
+                        >
+                          Revoke
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setSelectedUser({ id: user.id, username: user.username })
+                          setGrantModalOpen(true)
+                        }}
+                        className="text-xs text-primary hover:underline"
+                      >
+                        Grant Access
+                      </button>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-text-dim">
                     {new Date(user.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
                   </td>
@@ -105,6 +201,78 @@ export default function AdminUsersPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Grant CodeRabbit Modal */}
+      {grantModalOpen && selectedUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => { setGrantModalOpen(false); setLoginUrl(''); setToken(''); }}>
+          <div className="w-full max-w-md rounded-lg border border-border bg-surface p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-lg font-semibold text-text">Grant CodeRabbit Access</h2>
+            <p className="mt-2 text-sm text-text-muted">
+              Enable code reviews for <strong>{selectedUser.username}</strong>
+            </p>
+
+            {!loginUrl ? (
+              <>
+                <p className="mt-4 text-sm text-text-muted">
+                  Click below to generate a browser login URL for CodeRabbit authentication.
+                </p>
+                <div className="mt-6 flex gap-3">
+                  <button
+                    onClick={() => { setGrantModalOpen(false); setSelectedUser(null); }}
+                    className="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium text-text hover:bg-surface-hover"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleInitiate}
+                    disabled={initiating}
+                    className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                  >
+                    {initiating ? 'Generating...' : 'Generate Login URL'}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="mt-4 rounded-lg border border-border bg-background p-4">
+                  <p className="text-sm font-medium text-text mb-2">Step 1: Open this URL in your browser</p>
+                  <a
+                    href={loginUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm text-primary hover:underline break-all block mb-3"
+                  >
+                    {loginUrl}
+                  </a>
+                  <p className="text-sm font-medium text-text mb-2">Step 2: After login, paste the token here</p>
+                  <input
+                    type="text"
+                    value={token}
+                    onChange={(e) => setToken(e.target.value)}
+                    placeholder="Paste token here"
+                    className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text placeholder:text-text-dim focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+                <div className="mt-6 flex gap-3">
+                  <button
+                    onClick={() => { setGrantModalOpen(false); setLoginUrl(''); setToken(''); setSelectedUser(null); }}
+                    className="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium text-text hover:bg-surface-hover"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleComplete}
+                    disabled={!token.trim() || completing}
+                    className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                  >
+                    {completing ? 'Completing...' : 'Complete Login'}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
     </div>

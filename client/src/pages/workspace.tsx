@@ -45,6 +45,7 @@ import {
   Trash2,
   Save,
   RotateCcw,
+  Shield,
 } from 'lucide-react'
 import Editor from '@monaco-editor/react'
 import { cn } from '@/lib/utils'
@@ -1436,6 +1437,45 @@ export default function WorkspacePage() {
   const [resetBranch, setResetBranch] = useState('')
   const [resetCommit, setResetCommit] = useState('')
   const [resetting, setResetting] = useState(false)
+  const [coderabbitEnabled, setCoderabbitEnabled] = useState(false)
+  const [reviewModalOpen, setReviewModalOpen] = useState(false)
+  const [reviewing, setReviewing] = useState(false)
+  const [reviewResults, setReviewResults] = useState<any>(null)
+  const [reviewHistoryOpen, setReviewHistoryOpen] = useState(false)
+  const [reviewHistory, setReviewHistory] = useState<any[]>([])
+  const [selectedIssues, setSelectedIssues] = useState<number[]>([])
+
+  const toggleIssueSelection = (idx: number) => {
+    setSelectedIssues(prev => 
+      prev.includes(idx) ? prev.filter(i => i !== idx) : [...prev, idx]
+    )
+  }
+
+  const handleAutoFix = () => {
+    if (selectedIssues.length === 0) {
+      alert('Please select at least one issue to fix')
+      return
+    }
+    const issues = selectedIssues.map(idx => reviewResults.issues[idx])
+    const prompt = `Fix the following code review issues:\n\n${issues.map((issue: any, i: number) => 
+      `${i + 1}. [${issue.severity}] ${issue.fileName}\n${issue.codegenInstructions}\n`
+    ).join('\n')}`
+    
+    // TODO: Send to AI chat
+    alert(`Will send to AI:\n\n${prompt}`)
+    setReviewResults(null)
+    setSelectedIssues([])
+  }
+
+  const fetchReviewHistory = async () => {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/coderabbit/reviews`, { credentials: 'include' })
+      if (res.ok) {
+        const data = await res.json()
+        setReviewHistory(data.reviews || [])
+      }
+    } catch {}
+  }
   const [disconnectModalOpen, setDisconnectModalOpen] = useState(false)
   const [needsRemote, setNeedsRemote] = useState(false)
   const [repoUrl, setRepoUrl] = useState('')
@@ -1501,6 +1541,11 @@ export default function WorkspacePage() {
         setGithubConnected(data.connected)
         setGithubUsername(data.username)
       })
+      .catch(() => {})
+
+    fetch(`/api/projects/${projectId}/coderabbit/status`, { credentials: 'include' })
+      .then(r => r.json())
+      .then(data => setCoderabbitEnabled(data.enabled))
       .catch(() => {})
   }, [])
 
@@ -1606,6 +1651,39 @@ export default function WorkspacePage() {
     }
   }
 
+  const handleReview = async () => {
+    setReviewing(true)
+    try {
+      const res = await fetch(`/api/projects/${projectId}/coderabbit/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ scope: 'uncommitted' }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setReviewModalOpen(false)
+        setReviewResults(data)
+        fetchReviewHistory()
+        
+        // Show appropriate message based on results
+        if (data.issuesCount > 0) {
+          alert(`Review completed! Found ${data.issuesCount} issue${data.issuesCount !== 1 ? 's' : ''} to review. Check the results below.`)
+        }
+      } else {
+        const data = await res.json()
+        alert(data.error || 'Failed to run review')
+      }
+    } catch (err) {
+      alert('Failed to run review')
+    } finally {
+      setReviewing(false)
+    }
+  }
+
+  // Lock UI during review
+  const isUILocked = reviewing
+
   const handlePush = async () => {
     if (!commitMessage.trim()) return
     setPushing(true)
@@ -1701,6 +1779,27 @@ export default function WorkspacePage() {
               >
                 <GitBranch className="h-3.5 w-3.5" />
               </button>
+            )}
+            {coderabbitEnabled && (
+              <>
+                <button
+                  onClick={() => setReviewModalOpen(true)}
+                  className="rounded-md p-1.5 text-blue-500 hover:text-blue-600"
+                  title="Review Code"
+                >
+                  <Shield className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  onClick={() => {
+                    fetchReviewHistory()
+                    setReviewHistoryOpen(true)
+                  }}
+                  className="rounded-md p-1.5 text-text-dim hover:text-text-muted"
+                  title="Review History"
+                >
+                  <ListTodo className="h-3.5 w-3.5" />
+                </button>
+              </>
             )}
             <button onClick={toggleLayout} className="rounded-md p-1.5 text-text-dim hover:text-text-muted" title={isChatFirst ? 'Switch to Code First' : 'Switch to Chat First'}>
               <ArrowLeftRight className="h-3.5 w-3.5" />
@@ -1858,6 +1957,194 @@ export default function WorkspacePage() {
           </div>
         )}
 
+        {/* Review Code Modal */}
+        {reviewModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setReviewModalOpen(false)}>
+            <div className="w-full max-w-md rounded-lg border border-border bg-surface p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
+              <h2 className="text-lg font-semibold text-text mb-2">Review Uncommitted Code</h2>
+              <p className="text-sm text-text-muted mb-6">
+                CodeRabbit will analyze your uncommitted changes and provide feedback on potential issues, bugs, and improvements.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setReviewModalOpen(false)}
+                  className="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium text-text hover:bg-surface-hover"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleReview}
+                  disabled={reviewing}
+                  className="flex-1 rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50"
+                >
+                  {reviewing ? 'Reviewing...' : 'Start Review'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Reviewing Overlay */}
+        {reviewing && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+            <div className="rounded-lg bg-surface p-6 shadow-lg">
+              <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-3" />
+              <p className="text-sm font-medium text-text">Reviewing Code...</p>
+              <p className="text-xs text-text-muted mt-1">Please wait, this may take a minute</p>
+            </div>
+          </div>
+        )}
+
+        {/* Review Results Modal */}
+        {reviewResults && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setReviewResults(null)}>
+            <div className="w-full max-w-2xl max-h-[80vh] overflow-y-auto rounded-lg border border-border bg-surface p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
+              <h2 className="text-lg font-semibold text-text mb-2">
+                {reviewResults.issuesCount > 0 ? 'Issues Found' : 'Review Complete - No Issues'}
+              </h2>
+              <p className="text-sm text-text-muted mb-4">
+                {reviewResults.issuesCount > 0 
+                  ? `Found ${reviewResults.issuesCount} issue${reviewResults.issuesCount !== 1 ? 's' : ''} that need attention`
+                  : 'Your code looks good!'
+                }
+              </p>
+              
+              {reviewResults.issues && reviewResults.issues.length > 0 ? (
+                <div className="space-y-3 mb-6">
+                  {reviewResults.issues.map((issue: any, idx: number) => (
+                    <div key={idx} className="rounded-lg border border-border bg-background p-4">
+                      <div className="flex items-start gap-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedIssues.includes(idx)}
+                          onChange={() => toggleIssueSelection(idx)}
+                          className="mt-1"
+                        />
+                        <div className="flex-1">
+                          <div className="flex items-start gap-2 mb-2">
+                            <span className={`rounded px-2 py-0.5 text-xs font-medium ${
+                              issue.severity === 'critical' ? 'bg-red-500/10 text-red-500' :
+                              issue.severity === 'major' ? 'bg-orange-500/10 text-orange-500' :
+                              issue.severity === 'minor' ? 'bg-yellow-500/10 text-yellow-500' :
+                              'bg-blue-500/10 text-blue-500'
+                            }`}>
+                              {issue.severity}
+                            </span>
+                            <span className="text-xs text-text-muted">{issue.fileName}</span>
+                          </div>
+                          <p className="text-sm text-text mb-2">{issue.codegenInstructions}</p>
+                          {issue.suggestions && issue.suggestions.length > 0 && (
+                            <div className="text-xs text-text-dim">
+                              Suggestions: {issue.suggestions.join(', ')}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-success mb-6">✓ No issues found! Code looks good.</p>
+              )}
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => {
+                    setReviewResults(null)
+                    setSelectedIssues([])
+                  }}
+                  className="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium text-text hover:bg-surface-hover"
+                >
+                  Close
+                </button>
+                {reviewResults.status === 'passed' && reviewResults.issuesCount === 0 ? (
+                  <button
+                    onClick={async () => {
+                      setReviewResults(null)
+                      handleOpenPushModal()
+                      // Mark as pushed
+                      if (reviewResults.reviewId) {
+                        await fetch(`/api/projects/${projectId}/coderabbit/reviews/${reviewResults.reviewId}`, {
+                          method: 'PATCH',
+                          headers: { 'Content-Type': 'application/json' },
+                          credentials: 'include',
+                          body: JSON.stringify({ status: 'pushed' }),
+                        })
+                      }
+                    }}
+                    className="flex-1 rounded-lg bg-success px-4 py-2 text-sm font-medium text-white hover:bg-success/90"
+                  >
+                    Push to GitHub
+                  </button>
+                ) : reviewResults.issuesCount > 0 ? (
+                  <button
+                    onClick={handleAutoFix}
+                    disabled={selectedIssues.length === 0}
+                    className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90 disabled:opacity-50"
+                  >
+                    Auto Fix ({selectedIssues.length}) Issues
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Review History Modal */}
+        {reviewHistoryOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setReviewHistoryOpen(false)}>
+            <div className="w-full max-w-2xl max-h-[80vh] overflow-y-auto rounded-lg border border-border bg-surface p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
+              <h2 className="text-lg font-semibold text-text mb-4">Review History</h2>
+              
+              {reviewHistory.length === 0 ? (
+                <p className="text-sm text-text-muted text-center py-8">No reviews yet</p>
+              ) : (
+                <div className="space-y-3">
+                  {reviewHistory.map((review: any) => (
+                    <div key={review.id} className="rounded-lg border border-border bg-background p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className={`rounded px-2 py-0.5 text-xs font-medium ${
+                          review.status === 'passed' ? 'bg-success/10 text-success' :
+                          review.status === 'failed' ? 'bg-red-500/10 text-red-500' :
+                          review.status === 'superseded' ? 'bg-gray-500/10 text-gray-500' :
+                          review.status === 'pushed' ? 'bg-blue-500/10 text-blue-500' :
+                          'bg-yellow-500/10 text-yellow-500'
+                        }`}>
+                          {review.status}
+                        </span>
+                        <span className="text-xs text-text-muted">
+                          {new Date(review.createdAt).toLocaleString()}
+                        </span>
+                      </div>
+                      <p className="text-sm text-text">
+                        {review.issuesJson ? `${review.issuesJson.length} issue(s) found` : 'No issues'}
+                      </p>
+                      {review.status !== 'superseded' && review.status !== 'pushed' && review.issuesJson && (
+                        <button
+                          onClick={() => {
+                            setReviewResults({ issues: review.issuesJson, issuesCount: review.issuesJson.length, status: review.status, reviewId: review.id })
+                            setReviewHistoryOpen(false)
+                          }}
+                          className="mt-2 text-xs text-primary hover:underline"
+                        >
+                          View Details
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <button
+                onClick={() => setReviewHistoryOpen(false)}
+                className="mt-6 w-full rounded-lg border border-border px-4 py-2 text-sm font-medium text-text hover:bg-surface-hover"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Reset from Git Modal */}
         {resetModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setResetModalOpen(false)}>
@@ -1987,6 +2274,27 @@ export default function WorkspacePage() {
             >
               <GitBranch className="h-4 w-4" />
             </button>
+          )}
+          {coderabbitEnabled && (
+            <>
+              <button
+                onClick={() => setReviewModalOpen(true)}
+                className="rounded-md border border-blue-500 p-1.5 text-blue-500 hover:bg-blue-50"
+                title="Review Code"
+              >
+                <Shield className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => {
+                  fetchReviewHistory()
+                  setReviewHistoryOpen(true)
+                }}
+                className="rounded-md border border-border p-1.5 text-text-dim hover:bg-surface-hover"
+                title="Review History"
+              >
+                <ListTodo className="h-4 w-4" />
+              </button>
+            </>
           )}
           <button
             onClick={toggleLayout}
@@ -2151,6 +2459,168 @@ export default function WorkspacePage() {
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Review Code Modal */}
+      {reviewModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setReviewModalOpen(false)}>
+          <div className="w-full max-w-md rounded-lg border border-border bg-surface p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-lg font-semibold text-text mb-2">Review Uncommitted Code</h2>
+            <p className="text-sm text-text-muted mb-6">
+              CodeRabbit will analyze your uncommitted changes and provide feedback on potential issues, bugs, and improvements.
+            </p>
+            <div className="flex gap-3">
+              <button onClick={() => setReviewModalOpen(false)} className="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium text-text hover:bg-surface-hover">
+                Cancel
+              </button>
+              <button onClick={handleReview} disabled={reviewing} className="flex-1 rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50">
+                {reviewing ? 'Reviewing...' : 'Start Review'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reviewing Overlay */}
+      {reviewing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+          <div className="rounded-lg bg-surface p-6 shadow-lg">
+            <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-3" />
+            <p className="text-sm font-medium text-text">Reviewing Code...</p>
+            <p className="text-xs text-text-muted mt-1">Please wait, this may take a minute</p>
+          </div>
+        </div>
+      )}
+
+      {/* Review Results Modal */}
+      {reviewResults && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setReviewResults(null)}>
+          <div className="w-full max-w-2xl max-h-[80vh] overflow-y-auto rounded-lg border border-border bg-surface p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-lg font-semibold text-text mb-2">
+              {reviewResults.issuesCount > 0 ? 'Issues Found' : 'Review Complete - No Issues'}
+            </h2>
+            <p className="text-sm text-text-muted mb-4">
+              {reviewResults.issuesCount > 0 
+                ? `Found ${reviewResults.issuesCount} issue${reviewResults.issuesCount !== 1 ? 's' : ''} that need attention`
+                : 'Your code looks good!'
+              }
+            </p>
+            
+            {reviewResults.issues && reviewResults.issues.length > 0 ? (
+              <div className="space-y-3 mb-6">
+                {reviewResults.issues.map((issue: any, idx: number) => (
+                  <div key={idx} className="rounded-lg border border-border bg-background p-4">
+                    <div className="flex items-start gap-3">
+                      <input type="checkbox" checked={selectedIssues.includes(idx)} onChange={() => toggleIssueSelection(idx)} className="mt-1" />
+                      <div className="flex-1">
+                        <div className="flex items-start gap-2 mb-2">
+                          <span className={`rounded px-2 py-0.5 text-xs font-medium ${
+                            issue.severity === 'critical' ? 'bg-red-500/10 text-red-500' :
+                            issue.severity === 'major' ? 'bg-orange-500/10 text-orange-500' :
+                            issue.severity === 'minor' ? 'bg-yellow-500/10 text-yellow-500' :
+                            'bg-blue-500/10 text-blue-500'
+                          }`}>
+                            {issue.severity}
+                          </span>
+                          <span className="text-xs text-text-muted">{issue.fileName}</span>
+                        </div>
+                        <p className="text-sm text-text mb-2">{issue.codegenInstructions}</p>
+                        {issue.suggestions && issue.suggestions.length > 0 && (
+                          <div className="text-xs text-text-dim">
+                            Suggestions: {issue.suggestions.join(', ')}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-success mb-6">✓ No issues found! Code looks good.</p>
+            )}
+
+            <div className="flex gap-3">
+              <button onClick={() => { setReviewResults(null); setSelectedIssues([]); }} className="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium text-text hover:bg-surface-hover">
+                Close
+              </button>
+              {reviewResults.status === 'passed' && reviewResults.issuesCount === 0 ? (
+                <button
+                  onClick={async () => {
+                    setReviewResults(null)
+                    handleOpenPushModal()
+                    if (reviewResults.reviewId) {
+                      await fetch(`/api/projects/${projectId}/coderabbit/reviews/${reviewResults.reviewId}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({ status: 'pushed' }),
+                      })
+                    }
+                  }}
+                  className="flex-1 rounded-lg bg-success px-4 py-2 text-sm font-medium text-white hover:bg-success/90"
+                >
+                  Push to GitHub
+                </button>
+              ) : reviewResults.issuesCount > 0 ? (
+                <button onClick={handleAutoFix} disabled={selectedIssues.length === 0} className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90 disabled:opacity-50">
+                  Auto Fix ({selectedIssues.length}) Issues
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Review History Modal */}
+      {reviewHistoryOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setReviewHistoryOpen(false)}>
+          <div className="w-full max-w-2xl max-h-[80vh] overflow-y-auto rounded-lg border border-border bg-surface p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-lg font-semibold text-text mb-4">Review History</h2>
+            
+            {reviewHistory.length === 0 ? (
+              <p className="text-sm text-text-muted text-center py-8">No reviews yet</p>
+            ) : (
+              <div className="space-y-3">
+                {reviewHistory.map((review: any) => (
+                  <div key={review.id} className="rounded-lg border border-border bg-background p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className={`rounded px-2 py-0.5 text-xs font-medium ${
+                        review.status === 'passed' ? 'bg-success/10 text-success' :
+                        review.status === 'failed' ? 'bg-red-500/10 text-red-500' :
+                        review.status === 'superseded' ? 'bg-gray-500/10 text-gray-500' :
+                        review.status === 'pushed' ? 'bg-blue-500/10 text-blue-500' :
+                        'bg-yellow-500/10 text-yellow-500'
+                      }`}>
+                        {review.status}
+                      </span>
+                      <span className="text-xs text-text-muted">
+                        {new Date(review.createdAt).toLocaleString()}
+                      </span>
+                    </div>
+                    <p className="text-sm text-text">
+                      {review.issuesJson ? `${review.issuesJson.length} issue(s) found` : 'No issues'}
+                    </p>
+                    {review.status !== 'superseded' && review.status !== 'pushed' && review.issuesJson && (
+                      <button
+                        onClick={() => {
+                          setReviewResults({ issues: review.issuesJson, issuesCount: review.issuesJson.length, status: review.status, reviewId: review.id })
+                          setReviewHistoryOpen(false)
+                        }}
+                        className="mt-2 text-xs text-primary hover:underline"
+                      >
+                        View Details
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <button onClick={() => setReviewHistoryOpen(false)} className="mt-6 w-full rounded-lg border border-border px-4 py-2 text-sm font-medium text-text hover:bg-surface-hover">
+              Close
+            </button>
           </div>
         </div>
       )}
