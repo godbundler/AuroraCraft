@@ -8,6 +8,7 @@ import archiver from 'archiver'
 import path from 'path'
 import { db } from '../db/index.js'
 import { projects } from '../db/schema/projects.js'
+import { users } from '../db/schema/users.js'
 import { agentSessions } from '../db/schema/agent-sessions.js'
 import { agentMessages } from '../db/schema/agent-messages.js'
 import { agentLogs } from '../db/schema/agent-logs.js'
@@ -23,6 +24,7 @@ const createProjectSchema = z.object({
   language: z.enum(['java', 'kotlin']).default('java'),
   javaVersion: z.string().max(8).default('21'),
   compiler: z.enum(['maven', 'gradle', 'both']).default('gradle'),
+  bridge: z.enum(['opencode', 'kiro']).default('opencode'),
   visibility: z.enum(['public', 'private']).default('private'),
 })
 
@@ -117,6 +119,67 @@ export async function projectRoutes(app: FastifyInstance) {
   })
 
   // Get project stats
+  app.get('/api/projects/:id/jars', { preHandler: [authMiddleware] }, async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const [project] = await db.select().from(projects).where(eq(projects.id, id)).limit(1)
+    if (!project || project.userId !== request.user!.id) {
+      return reply.code(404).send({ error: 'Project not found' })
+    }
+
+    const projectDir = project.linkId ? `/home/auroracraft-${request.user!.username}/${project.linkId}` : null
+    if (!projectDir) {
+      return { maven: null, gradle: null }
+    }
+
+    const result: { maven: string | null; gradle: string | null } = { maven: null, gradle: null }
+
+    try {
+      const mavenDir = path.join(projectDir, 'target')
+      const mavenFiles = await readdir(mavenDir)
+      const mavenJar = mavenFiles.find(f => f.endsWith('.jar') && !f.endsWith('-sources.jar'))
+      if (mavenJar) result.maven = mavenJar
+    } catch {}
+
+    try {
+      const gradleDir = path.join(projectDir, 'build', 'libs')
+      const gradleFiles = await readdir(gradleDir)
+      const gradleJar = gradleFiles.find(f => f.endsWith('.jar') && !f.endsWith('-sources.jar'))
+      if (gradleJar) result.gradle = gradleJar
+    } catch {}
+
+    return result
+  })
+
+  app.get('/api/projects/:id/jars/:type/download', { preHandler: [authMiddleware] }, async (request, reply) => {
+    const { id, type } = request.params as { id: string; type: 'maven' | 'gradle' }
+    const [project] = await db.select().from(projects).where(eq(projects.id, id)).limit(1)
+    if (!project || project.userId !== request.user!.id) {
+      return reply.code(404).send({ error: 'Project not found' })
+    }
+
+    const projectDir = project.linkId ? `/home/auroracraft-${request.user!.username}/${project.linkId}` : null
+    if (!projectDir) {
+      return reply.code(404).send({ error: 'Project directory not found' })
+    }
+
+    const jarDir = type === 'maven' ? path.join(projectDir, 'target') : path.join(projectDir, 'build', 'libs')
+    try {
+      const files = await readdir(jarDir)
+      const jarFile = files.find(f => f.endsWith('.jar') && !f.endsWith('-sources.jar'))
+      if (!jarFile) {
+        return reply.code(404).send({ error: 'JAR file not found' })
+      }
+
+      const jarPath = path.join(jarDir, jarFile)
+      const jarContent = await readFile(jarPath)
+      reply.header('Content-Type', 'application/java-archive')
+      reply.header('Content-Disposition', `attachment; filename="${jarFile}"`)
+      return reply.send(jarContent)
+    } catch {
+      return reply.code(404).send({ error: 'JAR file not found' })
+    }
+  })
+
   app.get('/api/projects/:id/stats', { preHandler: [authMiddleware] }, async (request, reply) => {
     const { id } = request.params as { id: string }
 
@@ -220,6 +283,128 @@ export async function projectRoutes(app: FastifyInstance) {
     }
 
     return reply.status(201).send(project)
+  })
+
+  // Upload ZIP project
+  app.post('/api/projects/upload', { preHandler: [authMiddleware] }, async (request, reply) => {
+    try {
+      const parts = request.parts()
+      const fields: Record<string, string> = {}
+      let zipBuffer: Buffer | null = null
+
+      for await (const part of parts) {
+        if (part.type === 'file') {
+          if (part.fieldname === 'zipFile') {
+            zipBuffer = await part.toBuffer()
+          }
+        } else {
+          fields[part.fieldname] = part.value as string
+        }
+      }
+
+      if (!zipBuffer) {
+        return reply.status(400).send({ error: 'No ZIP file uploaded' })
+      }
+
+      const parsed = createProjectSchema.safeParse(fields)
+      if (!parsed.success) {
+        return reply.status(400).send({ error: parsed.error.issues[0].message })
+      }
+
+      const linkId = generateLinkId(parsed.data.name)
+      const username = request.user!.username
+      const projectDir = `/home/auroracraft-${username}/${linkId}`
+
+      await mkdir(projectDir, { recursive: true })
+
+      // Save uploaded zip
+      const zipPath = path.join(projectDir, 'upload.zip')
+      await writeFile(zipPath, zipBuffer)
+
+      // Extract zip
+      const { exec } = await import('child_process')
+      const { promisify } = await import('util')
+      const execAsync = promisify(exec)
+      await execAsync(`unzip -q "${zipPath}" -d "${projectDir}"`)
+      await rm(zipPath)
+
+      const [project] = await db
+        .insert(projects)
+        .values({
+          userId: request.user!.id,
+          linkId,
+          ...parsed.data,
+        })
+        .returning()
+
+      return reply.status(201).send(project)
+    } catch (err) {
+      app.log.error({ err }, 'Failed to upload and extract ZIP')
+      return reply.status(500).send({ error: 'Failed to process ZIP file' })
+    }
+  })
+
+  // Clone GitHub repository
+  app.post('/api/projects/clone', { preHandler: [authMiddleware] }, async (request, reply) => {
+    const { repoUrl, branch, commit, isPrivate, ...projectData } = request.body as { repoUrl: string; branch?: string; commit?: string; isPrivate: boolean; [key: string]: unknown }
+
+    const parsed = createProjectSchema.safeParse(projectData)
+    if (!parsed.success) {
+      return reply.status(400).send({ error: parsed.error.issues[0].message })
+    }
+
+    const linkId = generateLinkId(parsed.data.name)
+    const username = request.user!.username
+    const projectDir = `/home/auroracraft-${username}/${linkId}`
+
+    try {
+      await mkdir(projectDir, { recursive: true })
+
+      let cloneUrl = repoUrl
+      if (isPrivate) {
+        const [user] = await db
+          .select({ githubAccessToken: users.githubAccessToken })
+          .from(users)
+          .where(eq(users.id, request.user!.id))
+          .limit(1)
+
+        if (!user.githubAccessToken) {
+          await rm(projectDir, { recursive: true, force: true })
+          return reply.status(400).send({ error: 'GitHub account not connected' })
+        }
+
+        // Convert https://github.com/owner/repo to https://oauth2:TOKEN@github.com/owner/repo
+        cloneUrl = repoUrl.replace('https://github.com/', `https://oauth2:${user.githubAccessToken}@github.com/`)
+      }
+
+      const { exec } = await import('child_process')
+      const { promisify } = await import('util')
+      const execAsync = promisify(exec)
+      const branchFlag = branch ? ` -b "${branch}"` : ''
+      await execAsync(`git clone${branchFlag} "${cloneUrl}" "${projectDir}"`)
+
+      // Checkout specific commit if provided
+      if (commit) {
+        await execAsync(`git checkout "${commit}"`, { cwd: projectDir })
+      }
+
+      const [project] = await db
+        .insert(projects)
+        .values({
+          userId: request.user!.id,
+          linkId,
+          ...parsed.data,
+        })
+        .returning()
+
+      return reply.status(201).send(project)
+    } catch (err) {
+      app.log.error({ err }, 'Failed to clone repository')
+      try {
+        await rm(projectDir, { recursive: true, force: true })
+      } catch {}
+      return reply.status(500).send({ error: 'Failed to clone repository' })
+    }
   })
 
   // Update project

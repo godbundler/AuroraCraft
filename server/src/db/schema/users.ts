@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, pgEnum, timestamp } from 'drizzle-orm/pg-core'
+import { pgTable, uuid, varchar, pgEnum, timestamp, text } from 'drizzle-orm/pg-core'
 
 export const roleEnum = pgEnum('user_role', ['user', 'admin'])
 
@@ -8,6 +8,9 @@ export const users = pgTable('users', {
   email: varchar('email', { length: 255 }).unique().notNull(),
   passwordHash: varchar('password_hash', { length: 255 }).notNull(),
   role: roleEnum('role').default('user').notNull(),
+  githubAccessToken: text('github_access_token'),
+  githubUsername: varchar('github_username', { length: 255 }),
+  githubConnectedAt: timestamp('github_connected_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 })

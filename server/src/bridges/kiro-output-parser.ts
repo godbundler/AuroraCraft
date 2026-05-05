@@ -17,6 +17,9 @@ const ORPHAN_ANSI_RE = /(?:^|[\s.])\[[0-9;]{1,20}m/g
 
 function normalizeAssistantText(text: string): string {
   return text
+    .replace(/\n[ \t]{2,}(?=[A-Za-z"(])/g, ' ')
+    .replace(/^\s{2,}([-*]\s)/gm, '$1')
+    .replace(/\n\s*\n(?=\s*[-*]\s)/g, '\n')
     .replace(ACTION_TAG_INLINE_RE, (_m, ws) => ws || ' ')
     .replace(/\[Run\]\s+[^\n]*/g, '')
     .replace(ORPHAN_ANSI_RE, ' ')
@@ -47,23 +50,8 @@ function isKiroMetadataLine(line: string): boolean {
 }
 
 function collapseScriptTokens(text: string): string {
-  const lines = text.split('\n')
-  const parts: string[] = []
-  let token = ''
-
-  for (const line of lines) {
-    if (line === '') {
-      if (token) {
-        parts.push(token)
-        token = ''
-      }
-    } else {
-      token += line
-    }
-  }
-  if (token) parts.push(token)
-
-  return parts.join(' ')
+  // Since we no longer use script command, just preserve the text structure
+  return text
 }
 
 function extractResponseText(rawOutput: string): string {
@@ -98,10 +86,11 @@ function extractResponseText(rawOutput: string): string {
     responseChunks.push(currentChunk)
   }
 
+  // Join chunks preserving line breaks - remarkBreaks will handle single newlines
   return responseChunks
     .map((chunk) => collapseScriptTokens(chunk.join('\n')))
     .filter(Boolean)
-    .join('\n\n')
+    .join('\n')
 }
 
 // ── Main parser ──────────────────────────────────────────────────────

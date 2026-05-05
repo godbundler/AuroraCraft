@@ -103,7 +103,12 @@ function cleanAssistantText(text: string): string {
     /(\s*)\[(Created|Updated|Read|Deleted|Renamed)\]\s+([^\s`"']+|`[^`]+`)/g,
     (_m, leadingWs) => leadingWs || ' ',
   )
-  return withoutInline
+  const normalized = withoutInline
+    .replace(/\n[ \t]{2,}(?=[A-Za-z"(])/g, ' ')
+    .replace(/^\s{2,}([-*]\s)/gm, '$1')
+    .replace(/\n\s*\n(?=\s*[-*]\s)/g, '\n')
+
+  return normalized
     .replace(/\[Run\]\s+[^\n]*/g, '')
     .replace(/(?:^|[\s.])\[[0-9;]{1,20}m/g, ' ')
     .replace(/(\S)\s+(#{2,6}\s)/g, '$1\n\n$2')

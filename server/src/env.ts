@@ -12,6 +12,9 @@ const envSchema = z.object({
   OPENCODE_PORT_MIN: z.coerce.number().default(9000),
   OPENCODE_PORT_MAX: z.coerce.number().default(9999),
   OPENCODE_IDLE_TIMEOUT: z.coerce.number().default(120000),
+  GITHUB_CLIENT_ID: z.string().optional(),
+  GITHUB_CLIENT_SECRET: z.string().optional(),
+  GITHUB_CALLBACK_URL: z.string().url().optional(),
 })
 
 export const env = envSchema.parse(process.env)

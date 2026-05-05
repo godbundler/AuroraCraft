@@ -14,6 +14,7 @@
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^11.0.1",
+    "@fastify/multipart": "^10.0.0",
     "@fastify/static": "^9.0.0",
     "@fastify/websocket": "^11.2.0",
     "@opencode-ai/sdk": "^1.2.24",

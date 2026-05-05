@@ -96,7 +96,7 @@ opencode --version
 ### 5. PM2
 
 ```bash
-sudo npm install -g pm2
+sudo pnpm install -g pm2
 ```
 
 ---
@@ -106,7 +106,7 @@ sudo npm install -g pm2
 ```bash
 git clone https://github.com/YOUR_USERNAME/AuroraCraft.git
 cd AuroraCraft
-npm install
+pnpm install
 ```
 
 This installs dependencies for both `client/` and `server/` workspaces.
@@ -170,13 +170,13 @@ psql postgresql://auroracraft:auroracraft@localhost:5432/auroracraft -c 'SELECT 
 ### Run Migrations
 
 ```bash
-npm run db:migrate
+pnpm db:migrate
 ```
 
 ### Seed the Database
 
 ```bash
-npm run db:seed
+pnpm db:seed
 ```
 
 This creates the default **admin user**:
@@ -211,7 +211,7 @@ You should see OpenCode listening on `http://127.0.0.1:4096`.
 
 ```bash
 cd AuroraCraft
-npm run dev:server
+pnpm dev:server
 ```
 
 The Fastify server starts on `http://0.0.0.0:3000`.
@@ -220,7 +220,7 @@ The Fastify server starts on `http://0.0.0.0:3000`.
 
 ```bash
 cd AuroraCraft
-npm run dev:client
+pnpm dev:client
 ```
 
 Vite dev server starts on `http://localhost:5173`.

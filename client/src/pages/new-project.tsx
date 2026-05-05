@@ -1,10 +1,10 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router'
 import { ArrowLeft, ArrowRight, Check, Square, CheckSquare } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useProjects } from '@/hooks/use-projects'
 
-const steps = ['Project Info', 'Platform', 'Build Config', 'Source']
+const steps = ['Project Info', 'Platform', 'Build Config', 'AI Tool', 'Source']
 
 const softwareOptions = [
   { value: 'paper', label: 'Paper', description: 'High performance Minecraft fork' },
@@ -26,6 +26,11 @@ export default function NewProjectPage() {
   const [step, setStep] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [logoPreview, setLogoPreview] = useState<string | null>(null)
+  const [zipFile, setZipFile] = useState<File | null>(null)
+  const [githubRepoUrl, setGithubRepoUrl] = useState('')
+  const [isPrivateRepo, setIsPrivateRepo] = useState(false)
+  const [githubConnected, setGithubConnected] = useState(false)
+  const [githubUsername, setGithubUsername] = useState<string | null>(null)
   const [form, setForm] = useState({
     name: '',
     description: '',
@@ -35,7 +40,10 @@ export default function NewProjectPage() {
     language: 'java' as 'java' | 'kotlin',
     javaVersion: '21',
     compilers: ['gradle'] as string[],
+    bridge: 'opencode' as 'opencode' | 'kiro',
     source: 'blank' as 'blank' | 'zip' | 'github',
+    branch: '',
+    commit: '',
   })
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -70,6 +78,52 @@ export default function NewProjectPage() {
     setLogoPreview(null)
   }
 
+  const handleZipUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    
+    if (!file.name.endsWith('.zip')) {
+      setError('Please select a valid ZIP file')
+      return
+    }
+    
+    if (file.size > 50 * 1024 * 1024) {
+      setError('ZIP file size must be less than 50MB')
+      return
+    }
+    
+    setZipFile(file)
+    setError(null)
+  }
+
+  const removeZip = () => {
+    setZipFile(null)
+  }
+
+  useEffect(() => {
+    fetch('/api/auth/github/status', { credentials: 'include' })
+      .then(r => r.json())
+      .then(data => {
+        setGithubConnected(data.connected)
+        setGithubUsername(data.username)
+      })
+      .catch(() => {})
+
+    // Restore form state from sessionStorage
+    const savedState = sessionStorage.getItem('projectFormState')
+    if (savedState) {
+      try {
+        const parsed = JSON.parse(savedState)
+        setForm(parsed.form)
+        setStep(parsed.step)
+        setLogoPreview(parsed.logoPreview)
+        setGithubRepoUrl(parsed.githubRepoUrl)
+        setIsPrivateRepo(parsed.isPrivateRepo)
+        sessionStorage.removeItem('projectFormState')
+      } catch {}
+    }
+  }, [])
+
   const addVersion = (version: string) => {
     if (!version.trim()) return
     if (form.versions.includes(version.trim())) return
@@ -85,7 +139,17 @@ export default function NewProjectPage() {
       case 0: return form.name.trim().length >= 2
       case 1: return !!form.software
       case 2: return form.compilers.length > 0 && !!form.javaVersion
-      case 3: return !!form.source
+      case 3: return !!form.bridge
+      case 4: {
+        if (form.source === 'blank') return true
+        if (form.source === 'zip') return !!zipFile
+        if (form.source === 'github') {
+          if (!githubRepoUrl.trim()) return false
+          if (isPrivateRepo && !githubConnected) return false
+          return true
+        }
+        return false
+      }
       default: return false
     }
   }
@@ -94,17 +158,76 @@ export default function NewProjectPage() {
     setError(null)
     try {
       const compilerValue = form.compilers.length === 2 ? 'both' : form.compilers[0] as 'maven' | 'gradle'
-      const project = await createProject({
-        name: form.name.trim(),
-        description: form.description.trim() || undefined,
-        logo: form.logo || undefined,
-        versions: form.versions.length > 0 ? form.versions.join(',') : undefined,
-        software: form.software,
-        language: form.language,
-        javaVersion: form.javaVersion,
-        compiler: compilerValue,
-      })
-      navigate(`/workspace/${project.id}`)
+      
+      if (form.source === 'github' && githubRepoUrl) {
+        const response = await fetch('/api/projects/clone', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: form.name.trim(),
+            description: form.description.trim() || undefined,
+            logo: form.logo || undefined,
+            versions: form.versions.length > 0 ? form.versions.join(',') : undefined,
+            software: form.software,
+            language: form.language,
+            javaVersion: form.javaVersion,
+            compiler: compilerValue,
+            bridge: form.bridge,
+            repoUrl: githubRepoUrl.trim(),
+            branch: form.branch.trim() || undefined,
+            commit: form.commit.trim() || undefined,
+            isPrivate: isPrivateRepo,
+          }),
+        })
+        
+        if (!response.ok) {
+          const data = await response.json()
+          throw new Error(data.error || 'Failed to clone repository')
+        }
+        
+        const project = await response.json()
+        navigate(`/workspace/${project.id}`)
+      } else if (form.source === 'zip' && zipFile) {
+        const formData = new FormData()
+        formData.append('name', form.name.trim())
+        if (form.description.trim()) formData.append('description', form.description.trim())
+        if (form.logo) formData.append('logo', form.logo)
+        if (form.versions.length > 0) formData.append('versions', form.versions.join(','))
+        formData.append('software', form.software)
+        formData.append('language', form.language)
+        formData.append('javaVersion', form.javaVersion)
+        formData.append('compiler', compilerValue)
+        formData.append('bridge', form.bridge)
+        formData.append('zipFile', zipFile)
+        
+        const response = await fetch('/api/projects/upload', {
+          method: 'POST',
+          credentials: 'include',
+          body: formData,
+        })
+        
+        if (!response.ok) {
+          const data = await response.json()
+          throw new Error(data.error || 'Failed to create project')
+        }
+        
+        const project = await response.json()
+        navigate(`/workspace/${project.id}`)
+      } else {
+        const project = await createProject({
+          name: form.name.trim(),
+          description: form.description.trim() || undefined,
+          logo: form.logo || undefined,
+          versions: form.versions.length > 0 ? form.versions.join(',') : undefined,
+          software: form.software,
+          language: form.language,
+          javaVersion: form.javaVersion,
+          compiler: compilerValue,
+          bridge: form.bridge,
+        })
+        navigate(`/workspace/${project.id}`)
+      }
     } catch (err: unknown) {
       const message = err !== null && typeof err === 'object' && 'message' in err
         ? String(err.message)
@@ -380,23 +503,95 @@ export default function NewProjectPage() {
 
         {step === 3 && (
           <div className="space-y-4">
+            <div>
+              <label className="mb-3 block text-sm font-medium text-text">AI Coding Tool</label>
+              <p className="mb-4 text-xs text-text-muted">Choose the AI tool for this project. This cannot be changed later as each tool maintains separate conversation memory.</p>
+              <div className="space-y-3">
+                <button
+                  onClick={() => setForm({ ...form, bridge: 'opencode' })}
+                  className={cn(
+                    'flex w-full flex-col gap-2 rounded-lg border px-4 py-4 text-left transition-colors',
+                    form.bridge === 'opencode'
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:border-border-bright hover:bg-surface-hover'
+                  )}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={cn(
+                      'flex h-4 w-4 shrink-0 items-center justify-center rounded-full border',
+                      form.bridge === 'opencode'
+                        ? 'border-primary bg-primary'
+                        : 'border-border'
+                    )}>
+                      {form.bridge === 'opencode' && <div className="h-2 w-2 rounded-full bg-white" />}
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-text">OpenCode</p>
+                      <p className="text-xs text-text-muted">Free AI coding assistant</p>
+                    </div>
+                  </div>
+                  <div className="ml-7 space-y-1">
+                    <p className="text-xs font-medium text-text-muted">Available Model:</p>
+                    <div className="rounded-md bg-surface px-3 py-2">
+                      <p className="text-xs font-medium text-text">MiniMax M2.5</p>
+                      <p className="text-[10px] text-text-dim">Free AI model for coding tasks</p>
+                    </div>
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => setForm({ ...form, bridge: 'kiro' })}
+                  className={cn(
+                    'flex w-full flex-col gap-2 rounded-lg border px-4 py-4 text-left transition-colors',
+                    form.bridge === 'kiro'
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:border-border-bright hover:bg-surface-hover'
+                  )}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={cn(
+                      'flex h-4 w-4 shrink-0 items-center justify-center rounded-full border',
+                      form.bridge === 'kiro'
+                        ? 'border-primary bg-primary'
+                        : 'border-border'
+                    )}>
+                      {form.bridge === 'kiro' && <div className="h-2 w-2 rounded-full bg-white" />}
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-text">Kiro CLI</p>
+                      <p className="text-xs text-text-muted">Advanced AI with Claude Sonnet</p>
+                    </div>
+                  </div>
+                  <div className="ml-7 space-y-1">
+                    <p className="text-xs font-medium text-text-muted">Available Model:</p>
+                    <div className="rounded-md bg-surface px-3 py-2">
+                      <p className="text-xs font-medium text-text">Claude Sonnet 4.5</p>
+                      <p className="text-[10px] text-text-dim">Strong agentic coding with extended autonomous operation</p>
+                    </div>
+                  </div>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {step === 4 && (
+          <div className="space-y-4">
             <label className="mb-3 block text-sm font-medium text-text">Project Source</label>
             <div className="space-y-2">
               {[
                 { value: 'blank' as const, label: 'Blank Project', description: 'Start from scratch with a clean template' },
-                { value: 'zip' as const, label: 'Upload ZIP', description: 'Import from a ZIP archive (coming soon)' },
-                { value: 'github' as const, label: 'GitHub Repository', description: 'Clone from a GitHub repo (coming soon)' },
+                { value: 'zip' as const, label: 'Upload ZIP', description: 'Import from a ZIP archive' },
+                { value: 'github' as const, label: 'GitHub Repository', description: 'Clone from a GitHub repository' },
               ].map((opt) => (
                 <button
                   key={opt.value}
-                  onClick={() => opt.value === 'blank' && setForm({ ...form, source: opt.value })}
-                  disabled={opt.value !== 'blank'}
+                  onClick={() => setForm({ ...form, source: opt.value })}
                   className={cn(
                     'flex w-full items-center gap-3 rounded-lg border px-4 py-3 text-left transition-colors',
                     form.source === opt.value
                       ? 'border-primary bg-primary/5'
-                      : 'border-border hover:border-border-bright hover:bg-surface-hover',
-                    opt.value !== 'blank' && 'cursor-not-allowed opacity-50'
+                      : 'border-border hover:border-border-bright hover:bg-surface-hover'
                   )}
                 >
                   <div className={cn(
@@ -414,6 +609,154 @@ export default function NewProjectPage() {
                 </button>
               ))}
             </div>
+            
+            {form.source === 'zip' && (
+              <div className="mt-4">
+                <label className="mb-1.5 block text-sm font-medium text-text">Upload ZIP File</label>
+                {zipFile ? (
+                  <div className="flex items-center gap-4 rounded-lg border border-border bg-background px-4 py-3">
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-text">{zipFile.name}</p>
+                      <p className="text-xs text-text-muted">{(zipFile.size / 1024 / 1024).toFixed(2)} MB</p>
+                    </div>
+                    <button
+                      onClick={removeZip}
+                      className="text-sm text-destructive hover:text-destructive/80"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : (
+                  <label className="flex cursor-pointer flex-col items-center gap-2 rounded-lg border-2 border-dashed border-border bg-background px-4 py-8 transition-colors hover:border-primary hover:bg-surface">
+                    <div className="text-sm text-text-muted">Click to upload or drag and drop</div>
+                    <div className="text-xs text-text-dim">ZIP file (max 50MB)</div>
+                    <input
+                      type="file"
+                      accept=".zip"
+                      onChange={handleZipUpload}
+                      className="hidden"
+                    />
+                  </label>
+                )}
+              </div>
+            )}
+
+            {form.source === 'github' && (
+              <div className="mt-4 space-y-4">
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-text">Repository URL</label>
+                  <input
+                    type="text"
+                    value={githubRepoUrl}
+                    onChange={(e) => setGithubRepoUrl(e.target.value)}
+                    placeholder="https://github.com/owner/repository"
+                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text placeholder:text-text-dim focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-text">Branch</label>
+                  <input
+                    type="text"
+                    value={form.branch || ''}
+                    onChange={(e) => setForm({ ...form, branch: e.target.value })}
+                    placeholder="main"
+                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text placeholder:text-text-dim focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                  <p className="mt-1 text-xs text-text-muted">Leave empty to use default branch</p>
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-text">Commit Hash (Optional)</label>
+                  <input
+                    type="text"
+                    value={form.commit || ''}
+                    onChange={(e) => setForm({ ...form, commit: e.target.value })}
+                    placeholder="abc123def456..."
+                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text placeholder:text-text-dim focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                  <p className="mt-1 text-xs text-text-muted">Clone specific commit instead of latest</p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsPrivateRepo(!isPrivateRepo)}
+                    className="flex items-center gap-2"
+                  >
+                    {isPrivateRepo ? (
+                      <CheckSquare className="h-4 w-4 text-primary" />
+                    ) : (
+                      <Square className="h-4 w-4 text-border" />
+                    )}
+                    <span className="text-sm text-text">This is a private repository</span>
+                  </button>
+                </div>
+
+                {isPrivateRepo && (
+                  <div className="rounded-lg border border-border bg-surface p-4">
+                    {githubConnected ? (
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-sm font-medium text-text">Connected as @{githubUsername}</p>
+                          <p className="text-xs text-text-muted">You can clone private repositories</p>
+                        </div>
+                        <button
+                          onClick={async () => {
+                            await fetch('/api/auth/github/disconnect', { method: 'POST', credentials: 'include' })
+                            setGithubConnected(false)
+                            setGithubUsername(null)
+                          }}
+                          className="text-sm text-destructive hover:text-destructive/80"
+                        >
+                          Disconnect
+                        </button>
+                      </div>
+                    ) : (
+                      <div>
+                        <p className="text-sm font-medium text-text mb-2">Connect GitHub Account</p>
+                        <p className="text-xs text-text-muted mb-3">To clone private repositories, you need to connect your GitHub account</p>
+                        <button
+                          onClick={() => {
+                            // Save form state before OAuth
+                            sessionStorage.setItem('projectFormState', JSON.stringify({
+                              form,
+                              step,
+                              logoPreview,
+                              githubRepoUrl,
+                              isPrivateRepo,
+                            }))
+
+                            const width = 600
+                            const height = 700
+                            const left = window.screen.width / 2 - width / 2
+                            const top = window.screen.height / 2 - height / 2
+                            const returnTo = encodeURIComponent('/projects/new')
+                            window.open(
+                              `/api/auth/github/connect?returnTo=${returnTo}`,
+                              'github-oauth',
+                              `width=${width},height=${height},left=${left},top=${top}`
+                            )
+                            const checkConnection = setInterval(async () => {
+                              const res = await fetch('/api/auth/github/status', { credentials: 'include' })
+                              const data = await res.json()
+                              if (data.connected) {
+                                setGithubConnected(true)
+                                setGithubUsername(data.username)
+                                clearInterval(checkConnection)
+                              }
+                            }, 1000)
+                          }}
+                          className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                        >
+                          Connect GitHub
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

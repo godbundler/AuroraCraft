@@ -111,6 +111,8 @@
   border: 1px solid var(--color-border);
   border-radius: 4px;
   padding: 0.15em 0.35em;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .markdown-content pre {

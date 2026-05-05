@@ -64,6 +64,13 @@
       "when": 1774284000000,
       "tag": "0008_add_kiro_bridge",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1777963683866,
+      "tag": "0009_next_vulture",
+      "breakpoints": true
     }
   ]
 }

@@ -40,10 +40,11 @@ export class KiroProcessManager {
     }
 
     const modelFlag = model ? ` --model '${escapeForSingleQuotes(model)}'` : ''
-    const kiroCmd = `kiro-cli chat --no-interactive --trust-all-tools${modelFlag} '${escapedPrompt}'`
-    const command = `cd '${escapeForSingleQuotes(directory)}' && script -qfec '${escapeForSingleQuotes(kiroCmd)}' /dev/null`
+    // Always use --resume to continue the most recent session in this directory
+    const kiroCmd = `kiro-cli chat --no-interactive --trust-all-tools --resume${modelFlag} '${escapedPrompt}'`
+    const command = `cd '${escapeForSingleQuotes(directory)}' && ${kiroCmd}`
 
-    console.log(`[KiroProcess] Spawning kiro-cli for session ${sessionId} (user: ${systemUser}, dir: ${directory})`)
+    console.log(`[KiroProcess] Spawning kiro-cli for session ${sessionId} (user: ${systemUser}, dir: ${directory}, using --resume)`)
 
     const child = spawn('sudo', ['runuser', '-l', systemUser, '-c', command], {
       stdio: ['ignore', 'pipe', 'pipe'],

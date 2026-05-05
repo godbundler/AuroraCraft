@@ -8,8 +8,8 @@ module.exports = {
     {
       name: 'auroracraft-server',
       cwd: ROOT,
-      script: 'node_modules/.bin/tsx',
-      args: 'server/src/index.ts',
+      script: 'pnpm',
+      args: 'tsx server/src/index.ts',
       instances: 1,
       exec_mode: 'fork',
       autorestart: true,

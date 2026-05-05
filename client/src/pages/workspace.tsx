@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, memo } from 'react'
 import { Link, useParams } from 'react-router'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import remarkBreaks from 'remark-breaks'
 import rehypeHighlight from 'rehype-highlight'
 import {
   ArrowLeft,
@@ -18,6 +19,9 @@ import {
   Send,
   ArrowLeftRight,
   Download,
+  Package,
+  GitBranch,
+  Upload,
   Square,
   MessageSquare,
   MessageCircle,
@@ -40,6 +44,7 @@ import {
   Pencil,
   Trash2,
   Save,
+  RotateCcw,
 } from 'lucide-react'
 import Editor from '@monaco-editor/react'
 import { cn } from '@/lib/utils'
@@ -69,8 +74,15 @@ function getErrorMessage(err: unknown): string {
 
 function removeLeakedBadgeText(content: string): string {
   if (!content) return ''
+  const normalized = content
+    // unwrap indented wrapped lines inside normal paragraphs
+    .replace(/\n[ \t]{2,}(?=[A-Za-z"(])/g, ' ')
+    // keep bullet lists compact and non-indented
+    .replace(/^\s{2,}([-*]\s)/gm, '$1')
+    .replace(/\n\s*\n(?=\s*[-*]\s)/g, '\n')
+
   // Remove raw tool/file markers and leftover ANSI fragments.
-  return content
+  return normalized
     .replace(/\[(?:Created|Updated|Read|Deleted|Renamed)\][^\n]*/g, '')
     .replace(/\[Run\]\s+[^\n]*/g, '')
     .replace(/(?:^|[\s.])\[[0-9;]{1,20}m/g, ' ')
@@ -88,7 +100,7 @@ function MarkdownContent({ content }: { content: string }) {
   if (!cleaned) return null
   return (
     <div className="markdown-content text-sm">
-      <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+      <Markdown remarkPlugins={[remarkGfm, remarkBreaks]} rehypePlugins={[rehypeHighlight]}>
         {cleaned}
       </Markdown>
     </div>
@@ -662,12 +674,14 @@ function MessageContent({ message, onFileSelect }: { message: AgentMessage; onFi
 
 // ── Model selector ───────────────────────────────────────────────────
 
-function ModelSelector({ selectedModel, onModelChange, disabled }: {
+function ModelSelector({ selectedModel, onModelChange, availableModels, disabled }: {
   selectedModel: string
   onModelChange: (modelId: string) => void
+  availableModels?: typeof AI_MODELS
   disabled?: boolean
 }) {
   const [open, setOpen] = useState(false)
+  const [openUpward, setOpenUpward] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -678,7 +692,18 @@ function ModelSelector({ selectedModel, onModelChange, disabled }: {
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
 
-  const current = AI_MODELS.find((m) => m.id === selectedModel) ?? AI_MODELS[0]
+  useEffect(() => {
+    if (open && ref.current) {
+      const rect = ref.current.getBoundingClientRect()
+      const spaceBelow = window.innerHeight - rect.bottom
+      const spaceAbove = rect.top
+      // Open upward if less than 400px space below and more space above
+      setOpenUpward(spaceBelow < 400 && spaceAbove > spaceBelow)
+    }
+  }, [open])
+
+  const models = availableModels ?? AI_MODELS
+  const current = models.find((m) => m.id === selectedModel) ?? models[0]
 
   return (
     <div ref={ref} className="relative">
@@ -696,9 +721,9 @@ function ModelSelector({ selectedModel, onModelChange, disabled }: {
         <ChevronDown className={cn('h-3 w-3 shrink-0 transition-transform', open && 'rotate-180')} />
       </button>
       {open && (() => {
-        const opencodeModels = AI_MODELS.filter((m) => m.id.startsWith('opencode/'))
-        const kiroModels = AI_MODELS.filter((m) => m.id.startsWith('kiro/'))
-        const renderModel = (model: typeof AI_MODELS[number]) => (
+        const opencodeModels = models.filter((m) => m.id.startsWith('opencode/'))
+        const kiroModels = models.filter((m) => m.id.startsWith('kiro/'))
+        const renderModel = (model: typeof models[number]) => (
           <button
             key={model.id}
             type="button"
@@ -719,7 +744,10 @@ function ModelSelector({ selectedModel, onModelChange, disabled }: {
           </button>
         )
         return (
-          <div className="absolute bottom-full left-0 z-50 mb-1 w-64 rounded-lg border border-border bg-surface shadow-lg">
+          <div className={cn(
+            'absolute left-0 z-50 w-64 max-h-[70vh] overflow-y-auto rounded-lg border border-border bg-surface shadow-lg',
+            openUpward ? 'bottom-full mb-1' : 'top-full mt-1'
+          )}>
             <div className="p-1">
               {opencodeModels.length > 0 && (
                 <>
@@ -750,13 +778,21 @@ function getBridgeFromModel(modelId: string): 'opencode' | 'kiro' {
   return modelId.startsWith('kiro/') ? 'kiro' : 'opencode'
 }
 
-function ChatPanel({ projectId, onRefreshFiles, onFileSelect }: { projectId: string; onRefreshFiles?: () => void; onFileSelect?: (path: string) => void }) {
+function ChatPanel({ projectId, projectBridge, onRefreshFiles, onFileSelect }: { projectId: string; projectBridge?: 'opencode' | 'kiro'; onRefreshFiles?: () => void; onFileSelect?: (path: string) => void }) {
   const { sessions, isLoading: sessionsLoading, createSession } = useAgentSessions(projectId)
 
   const initialSessionId = sessions.length > 0 ? sessions[0].id : null
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [pendingMessage, setPendingMessage] = useState<string | null>(null)
-  const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL_ID)
+  
+  // Filter models based on project's bridge setting
+  const availableModels = AI_MODELS.filter(m => {
+    if (!projectBridge) return true
+    return projectBridge === 'kiro' ? m.id.startsWith('kiro/') : m.id.startsWith('opencode/')
+  })
+  const defaultModel = availableModels[0]?.id ?? DEFAULT_MODEL_ID
+  const [selectedModel, setSelectedModel] = useState(defaultModel)
+  
   const resolvedSessionId = activeSessionId ?? initialSessionId
 
   const handleSessionCreated = useCallback((id: string, message: string) => {
@@ -784,6 +820,7 @@ function ChatPanel({ projectId, onRefreshFiles, onFileSelect }: { projectId: str
       onPendingMessageSent={() => setPendingMessage(null)}
       selectedModel={selectedModel}
       onModelChange={setSelectedModel}
+      availableModels={availableModels}
       onRefreshFiles={onRefreshFiles}
       onFileSelect={onFileSelect}
     />
@@ -792,7 +829,7 @@ function ChatPanel({ projectId, onRefreshFiles, onFileSelect }: { projectId: str
 
 // ── Chat input (isolated to prevent parent re-renders on keystroke) ─
 
-const ChatInput = memo(function ChatInput({ onSend, disabled, isRunning, isCancelling, onCancel, selectedModel, onModelChange, modelDisabled }: {
+const ChatInput = memo(function ChatInput({ onSend, disabled, isRunning, isCancelling, onCancel, selectedModel, onModelChange, availableModels, modelDisabled }: {
   onSend: (message: string) => void
   disabled?: boolean
   isRunning?: boolean
@@ -800,6 +837,7 @@ const ChatInput = memo(function ChatInput({ onSend, disabled, isRunning, isCance
   onCancel?: () => void
   selectedModel: string
   onModelChange: (modelId: string) => void
+  availableModels?: typeof AI_MODELS
   modelDisabled?: boolean
 }) {
   const [input, setInput] = useState('')
@@ -817,7 +855,7 @@ const ChatInput = memo(function ChatInput({ onSend, disabled, isRunning, isCance
     <div className="border-t border-border p-4">
       <div className="mb-2 flex items-center gap-2">
         <span className="text-[10px] font-medium uppercase tracking-wider text-text-dim/60">Model</span>
-        <ModelSelector selectedModel={selectedModel} onModelChange={onModelChange} disabled={modelDisabled} />
+        <ModelSelector selectedModel={selectedModel} onModelChange={onModelChange} availableModels={availableModels} disabled={modelDisabled} />
         <span className="ml-auto text-[10px] text-text-dim/40">Ctrl+Enter to send</span>
       </div>
       <div className="chatbox-glow flex items-end gap-2 rounded-xl border border-border bg-background p-1.5">
@@ -895,13 +933,14 @@ function ChatEmptyState({ onSessionCreated, createSession, selectedModel, onMode
   )
 }
 
-function ChatSession({ projectId, sessionId, pendingMessage, onPendingMessageSent, selectedModel, onModelChange, onRefreshFiles, onFileSelect }: {
+function ChatSession({ projectId, sessionId, pendingMessage, onPendingMessageSent, selectedModel, onModelChange, availableModels, onRefreshFiles, onFileSelect }: {
   projectId: string
   sessionId: string
   pendingMessage?: string | null
   onPendingMessageSent?: () => void
   selectedModel: string
   onModelChange: (modelId: string) => void
+  availableModels?: typeof AI_MODELS
   onRefreshFiles?: () => void
   onFileSelect?: (path: string) => void
 }) {
@@ -1139,6 +1178,7 @@ function ChatSession({ projectId, sessionId, pendingMessage, onPendingMessageSen
           onCancel={handleCancel}
           selectedModel={selectedModel}
           onModelChange={onModelChange}
+          availableModels={availableModels}
           modelDisabled={isSending || session?.status === 'running'}
         />
       </div>
@@ -1381,6 +1421,25 @@ export default function WorkspacePage() {
   const [mobileTab, setMobileTab] = useState<'chat' | 'files' | 'code'>('chat')
   const [layoutMode, setLayoutMode] = useState<string>('chat-first')
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
+  const [jars, setJars] = useState<{ maven: string | null; gradle: string | null }>({ maven: null, gradle: null })
+  const [jarMenuOpen, setJarMenuOpen] = useState(false)
+  const jarMenuRef = useRef<HTMLDivElement>(null)
+  const [githubConnected, setGithubConnected] = useState(false)
+  const [githubUsername, setGithubUsername] = useState<string | null>(null)
+  const [pushModalOpen, setPushModalOpen] = useState(false)
+  const [branches, setBranches] = useState<string[]>([])
+  const [selectedBranch, setSelectedBranch] = useState('')
+  const [commitMessage, setCommitMessage] = useState('')
+  const [pushing, setPushing] = useState(false)
+  const [forcePush, setForcePush] = useState(false)
+  const [resetModalOpen, setResetModalOpen] = useState(false)
+  const [resetBranch, setResetBranch] = useState('')
+  const [resetCommit, setResetCommit] = useState('')
+  const [resetting, setResetting] = useState(false)
+  const [disconnectModalOpen, setDisconnectModalOpen] = useState(false)
+  const [needsRemote, setNeedsRemote] = useState(false)
+  const [repoUrl, setRepoUrl] = useState('')
+  const [settingRemote, setSettingRemote] = useState(false)
   const fileOps = useFileOperations(projectId ?? '')
   const initialTabSetRef = useRef(false)
 
@@ -1413,6 +1472,165 @@ export default function WorkspacePage() {
     setSelectedFile(filePath)
     if (isMobile) setMobileTab('code')
   }, [isMobile])
+
+  useEffect(() => {
+    if (!projectId) return
+    fetch(`/api/projects/${projectId}/jars`, { credentials: 'include' })
+      .then(r => r.json())
+      .then(setJars)
+      .catch(() => setJars({ maven: null, gradle: null }))
+  }, [projectId])
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (jarMenuRef.current && !jarMenuRef.current.contains(e.target as Node)) setJarMenuOpen(false)
+    }
+    if (jarMenuOpen) document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [jarMenuOpen])
+
+  const downloadJar = (type: 'maven' | 'gradle') => {
+    window.location.href = `/api/projects/${projectId}/jars/${type}/download`
+    setJarMenuOpen(false)
+  }
+
+  useEffect(() => {
+    fetch('/api/auth/github/status', { credentials: 'include' })
+      .then(r => r.json())
+      .then(data => {
+        setGithubConnected(data.connected)
+        setGithubUsername(data.username)
+      })
+      .catch(() => {})
+  }, [])
+
+  const handleGithubConnect = () => {
+    const width = 600
+    const height = 700
+    const left = window.screen.width / 2 - width / 2
+    const top = window.screen.height / 2 - height / 2
+    const returnTo = encodeURIComponent(`/workspace/${projectId}`)
+    window.open(
+      `/api/auth/github/connect?returnTo=${returnTo}`,
+      'github-oauth',
+      `width=${width},height=${height},left=${left},top=${top}`
+    )
+    const checkConnection = setInterval(async () => {
+      const res = await fetch('/api/auth/github/status', { credentials: 'include' })
+      const data = await res.json()
+      if (data.connected) {
+        setGithubConnected(true)
+        setGithubUsername(data.username)
+        clearInterval(checkConnection)
+      }
+    }, 1000)
+  }
+
+  const handleGithubDisconnect = async () => {
+    await fetch('/api/auth/github/disconnect', { method: 'POST', credentials: 'include' })
+    setGithubConnected(false)
+    setGithubUsername(null)
+  }
+
+  const handleOpenPushModal = async () => {
+    const res = await fetch(`/api/projects/${projectId}/git/branches`, { credentials: 'include' })
+    const data = await res.json()
+    
+    if (data.needsRemote) {
+      setNeedsRemote(true)
+      setPushModalOpen(true)
+      return
+    }
+    
+    setBranches(data.branches || [])
+    setSelectedBranch(data.currentBranch || '')
+    setNeedsRemote(false)
+    setPushModalOpen(true)
+  }
+
+  const handleSetRemote = async () => {
+    if (!repoUrl.trim()) return
+    setSettingRemote(true)
+    try {
+      const res = await fetch(`/api/projects/${projectId}/git/remote`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ repoUrl: repoUrl.trim() }),
+      })
+      if (res.ok) {
+        setNeedsRemote(false)
+        setRepoUrl('')
+        // Reload branches
+        const branchRes = await fetch(`/api/projects/${projectId}/git/branches`, { credentials: 'include' })
+        const data = await branchRes.json()
+        setBranches(data.branches || [])
+        setSelectedBranch(data.currentBranch || '')
+      } else {
+        const data = await res.json()
+        alert(data.error || 'Failed to set repository')
+      }
+    } catch (err) {
+      alert('Failed to set repository')
+    } finally {
+      setSettingRemote(false)
+    }
+  }
+
+  const handleReset = async () => {
+    setResetting(true)
+    try {
+      const res = await fetch(`/api/projects/${projectId}/git/reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ 
+          branch: resetBranch.trim() || undefined, 
+          commit: resetCommit.trim() || undefined 
+        }),
+      })
+      if (res.ok) {
+        setResetModalOpen(false)
+        setResetBranch('')
+        setResetCommit('')
+        alert('Project reset successfully! Refreshing...')
+        window.location.reload()
+      } else {
+        const data = await res.json()
+        alert(data.error || 'Failed to reset project')
+      }
+    } catch (err) {
+      alert('Failed to reset project')
+    } finally {
+      setResetting(false)
+    }
+  }
+
+  const handlePush = async () => {
+    if (!commitMessage.trim()) return
+    setPushing(true)
+    try {
+      const res = await fetch(`/api/projects/${projectId}/git/push`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ branch: selectedBranch, message: commitMessage, force: forcePush }),
+      })
+      if (res.ok) {
+        setPushModalOpen(false)
+        setCommitMessage('')
+        setForcePush(false)
+        alert('Code pushed successfully!')
+      } else {
+        const data = await res.json()
+        alert(data.error || 'Failed to push code')
+      }
+    } catch (err) {
+      alert('Failed to push code')
+    } finally {
+      setPushing(false)
+    }
+  }
 
   if (isLoading) {
     return (
@@ -1451,12 +1669,73 @@ export default function WorkspacePage() {
           <span className="truncate text-sm font-medium text-text">{project.name}</span>
           <span className="shrink-0 rounded bg-accent px-1.5 py-0.5 text-[10px] text-text-dim">{project.software}</span>
           <div className="ml-auto flex items-center gap-1.5">
+            {githubConnected ? (
+              <>
+                <button
+                  onClick={handleOpenPushModal}
+                  className="rounded-md p-1.5 text-text-dim hover:text-text-muted"
+                  title="Push to GitHub"
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  onClick={() => setResetModalOpen(true)}
+                  className="rounded-md p-1.5 text-orange-500 hover:text-orange-600"
+                  title="Reset from Git"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  onClick={() => setDisconnectModalOpen(true)}
+                  className="rounded-md p-1.5 text-red-500 hover:text-red-600"
+                  title={`Connected as @${githubUsername}`}
+                >
+                  <GitBranch className="h-3.5 w-3.5" />
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={handleGithubConnect}
+                className="rounded-md p-1.5 text-text-dim hover:text-text-muted"
+                title="Connect GitHub"
+              >
+                <GitBranch className="h-3.5 w-3.5" />
+              </button>
+            )}
             <button onClick={toggleLayout} className="rounded-md p-1.5 text-text-dim hover:text-text-muted" title={isChatFirst ? 'Switch to Code First' : 'Switch to Chat First'}>
               <ArrowLeftRight className="h-3.5 w-3.5" />
             </button>
             <a href={`/api/projects/${projectId}/download/zip`} download className="rounded-md p-1.5 text-text-dim hover:text-text-muted" title="Download project">
               <Download className="h-3.5 w-3.5" />
             </a>
+            <div className="relative" ref={jarMenuRef}>
+              <button 
+                onClick={() => setJarMenuOpen(!jarMenuOpen)} 
+                className="rounded-md p-1.5 text-text-dim hover:text-text-muted" 
+                title="Download plugin JAR"
+                disabled={!jars.maven && !jars.gradle}
+              >
+                <Package className="h-3.5 w-3.5" />
+              </button>
+              {jarMenuOpen && (
+                <div className="absolute right-0 top-full mt-1 w-32 rounded-md border border-border bg-surface shadow-lg z-50">
+                  <button
+                    onClick={() => downloadJar('maven')}
+                    disabled={!jars.maven}
+                    className="w-full px-3 py-2 text-left text-sm hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Maven
+                  </button>
+                  <button
+                    onClick={() => downloadJar('gradle')}
+                    disabled={!jars.gradle}
+                    className="w-full px-3 py-2 text-left text-sm hover:bg-surface-hover disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Gradle
+                  </button>
+                </div>
+              )}
+            </div>
             <Link to={`/project/${projectId}/settings`} className="rounded-md p-1.5 text-text-dim hover:text-text-muted" title="Settings">
               <Settings className="h-3.5 w-3.5" />
             </Link>
@@ -1469,7 +1748,7 @@ export default function WorkspacePage() {
               <MessageSquare className="h-4 w-4 text-primary" />
               <span className="text-sm font-medium text-text">AI Assistant</span>
             </div>
-            <ChatPanel projectId={project.id} onRefreshFiles={refetchFiles} onFileSelect={handleFileSelect} />
+            <ChatPanel projectId={project.id} projectBridge={project.bridge} onRefreshFiles={refetchFiles} onFileSelect={handleFileSelect} />
           </div>
           <div className={cn('h-full', mobileTab !== 'files' && 'hidden')}>
             <FileTreePanel files={files} filesLoading={filesLoading} refetchFiles={refetchFiles} onFileSelect={handleFileSelect} selectedFile={selectedFile} fileOps={fileOps} />
@@ -1484,6 +1763,182 @@ export default function WorkspacePage() {
             <MobileTabButton key={tab.id} active={mobileTab === tab.id} icon={tab.icon} label={tab.label} onClick={() => setMobileTab(tab.id)} />
           ))}
         </nav>
+
+        {/* Push to GitHub Modal */}
+        {pushModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setPushModalOpen(false)}>
+            <div className="w-full max-w-md rounded-lg border border-border bg-surface p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
+              <h2 className="text-lg font-semibold text-text mb-4">{needsRemote ? 'Set GitHub Repository' : 'Push to GitHub'}</h2>
+              
+              {needsRemote ? (
+                <div className="space-y-4">
+                  <p className="text-sm text-text-muted">Enter your GitHub repository URL to push code.</p>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-text">Repository URL</label>
+                    <input
+                      type="text"
+                      value={repoUrl}
+                      onChange={(e) => setRepoUrl(e.target.value)}
+                      placeholder="https://github.com/username/repository.git"
+                      className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text placeholder:text-text-dim focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
+                  </div>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => setPushModalOpen(false)}
+                      className="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium text-text hover:bg-surface-hover"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleSetRemote}
+                      disabled={!repoUrl.trim() || settingRemote}
+                      className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                    >
+                      {settingRemote ? 'Setting...' : 'Set Repository'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="mb-1.5 block text-sm font-medium text-text">Branch</label>
+                      <select
+                        value={selectedBranch}
+                        onChange={(e) => setSelectedBranch(e.target.value)}
+                        className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                      >
+                        {branches.map(branch => (
+                          <option key={branch} value={branch}>{branch}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="mb-1.5 block text-sm font-medium text-text">Commit Message</label>
+                      <textarea
+                        value={commitMessage}
+                        onChange={(e) => setCommitMessage(e.target.value)}
+                        placeholder="Update plugin code"
+                        rows={3}
+                        className="w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm text-text placeholder:text-text-dim focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                      />
+                    </div>
+
+                    <label className="flex items-center gap-2 text-sm text-text-muted cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={forcePush}
+                        onChange={(e) => setForcePush(e.target.checked)}
+                        className="rounded border-border"
+                      />
+                      Force push (overwrite remote changes)
+                    </label>
+                  </div>
+
+                  <div className="mt-6 flex gap-3">
+                    <button
+                      onClick={() => setPushModalOpen(false)}
+                      className="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium text-text hover:bg-surface-hover"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handlePush}
+                      disabled={!commitMessage.trim() || pushing}
+                      className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                    >
+                      {pushing ? 'Pushing...' : 'Push'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Reset from Git Modal */}
+        {resetModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setResetModalOpen(false)}>
+            <div className="w-full max-w-md rounded-lg border border-border bg-surface p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
+              <h2 className="text-lg font-semibold text-text mb-2">Reset from Git</h2>
+              <p className="text-sm text-destructive mb-4">⚠️ This will delete all local files and clone fresh from Git!</p>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-text">Branch (Optional)</label>
+                  <input
+                    type="text"
+                    value={resetBranch}
+                    onChange={(e) => setResetBranch(e.target.value)}
+                    placeholder="main"
+                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text placeholder:text-text-dim focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                  <p className="mt-1 text-xs text-text-muted">Leave empty to use current branch</p>
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-text">Commit Hash (Optional)</label>
+                  <input
+                    type="text"
+                    value={resetCommit}
+                    onChange={(e) => setResetCommit(e.target.value)}
+                    placeholder="abc123def456..."
+                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text placeholder:text-text-dim focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                  <p className="mt-1 text-xs text-text-muted">Leave empty to use latest commit</p>
+                </div>
+              </div>
+
+              <div className="mt-6 flex gap-3">
+                <button
+                  onClick={() => setResetModalOpen(false)}
+                  className="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium text-text hover:bg-surface-hover"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleReset}
+                  disabled={resetting}
+                  className="flex-1 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50"
+                >
+                  {resetting ? 'Resetting...' : 'Reset Project'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Disconnect GitHub Modal */}
+        {disconnectModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setDisconnectModalOpen(false)}>
+            <div className="w-full max-w-sm rounded-lg border border-border bg-surface p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
+              <h2 className="text-lg font-semibold text-text mb-2">Disconnect GitHub</h2>
+              <p className="text-sm text-text-muted mb-6">
+                Are you sure you want to disconnect your GitHub account (@{githubUsername})?
+              </p>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setDisconnectModalOpen(false)}
+                  className="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium text-text hover:bg-surface-hover"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    handleGithubDisconnect()
+                    setDisconnectModalOpen(false)
+                  }}
+                  className="flex-1 rounded-lg bg-red-500 px-4 py-2 text-sm font-medium text-white hover:bg-red-600"
+                >
+                  Disconnect
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     )
   }
@@ -1500,6 +1955,39 @@ export default function WorkspacePage() {
           <span className="rounded bg-accent px-2 py-0.5 text-xs text-text-dim">{project.language}</span>
         </div>
         <div className="flex items-center gap-2">
+          {githubConnected ? (
+            <>
+              <button
+                onClick={handleOpenPushModal}
+                className="rounded-md border border-border p-1.5 text-text-dim hover:bg-surface-hover hover:text-text-muted"
+                title="Push to GitHub"
+              >
+                <Upload className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => setResetModalOpen(true)}
+                className="rounded-md border border-orange-500 p-1.5 text-orange-500 hover:bg-orange-50"
+                title="Reset from Git"
+              >
+                <RotateCcw className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => setDisconnectModalOpen(true)}
+                className="rounded-md border border-red-500 p-1.5 text-red-500 hover:bg-red-50"
+                title={`Connected as @${githubUsername}`}
+              >
+                <GitBranch className="h-4 w-4" />
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={handleGithubConnect}
+              className="rounded-md border border-border p-1.5 text-text-dim hover:bg-surface-hover hover:text-text-muted"
+              title="Connect GitHub"
+            >
+              <GitBranch className="h-4 w-4" />
+            </button>
+          )}
           <button
             onClick={toggleLayout}
             className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-text-muted transition-colors hover:bg-surface-hover hover:text-text"
@@ -1541,7 +2029,7 @@ export default function WorkspacePage() {
                 <MessageSquare className="h-4 w-4 text-primary" />
                 <span className="text-sm font-medium text-text">AI Assistant</span>
               </div>
-              <ChatPanel projectId={project.id} onRefreshFiles={refetchFiles} onFileSelect={handleFileSelect} />
+              <ChatPanel projectId={project.id} projectBridge={project.bridge} onRefreshFiles={refetchFiles} onFileSelect={handleFileSelect} />
             </aside>
 
             <aside className="w-56 shrink-0 overflow-hidden border-r border-border">
@@ -1567,11 +2055,187 @@ export default function WorkspacePage() {
                 <MessageSquare className="h-4 w-4 text-primary" />
                 <span className="text-sm font-medium text-text">AI Assistant</span>
               </div>
-              <ChatPanel projectId={project.id} onRefreshFiles={refetchFiles} onFileSelect={handleFileSelect} />
+              <ChatPanel projectId={project.id} projectBridge={project.bridge} onRefreshFiles={refetchFiles} onFileSelect={handleFileSelect} />
             </aside>
           </>
         )}
       </div>
+
+      {/* Push to GitHub Modal */}
+      {pushModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setPushModalOpen(false)}>
+          <div className="w-full max-w-md rounded-lg border border-border bg-surface p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-lg font-semibold text-text mb-4">{needsRemote ? 'Set GitHub Repository' : 'Push to GitHub'}</h2>
+            
+            {needsRemote ? (
+              <div className="space-y-4">
+                <p className="text-sm text-text-muted">Enter your GitHub repository URL to push code.</p>
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-text">Repository URL</label>
+                  <input
+                    type="text"
+                    value={repoUrl}
+                    onChange={(e) => setRepoUrl(e.target.value)}
+                    placeholder="https://github.com/username/repository.git"
+                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text placeholder:text-text-dim focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setPushModalOpen(false)}
+                    className="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium text-text hover:bg-surface-hover"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSetRemote}
+                    disabled={!repoUrl.trim() || settingRemote}
+                    className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                  >
+                    {settingRemote ? 'Setting...' : 'Set Repository'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="space-y-4">
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-text">Branch</label>
+                    <select
+                      value={selectedBranch}
+                      onChange={(e) => setSelectedBranch(e.target.value)}
+                      className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                    >
+                      {branches.map(branch => (
+                        <option key={branch} value={branch}>{branch}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-text">Commit Message</label>
+                    <textarea
+                      value={commitMessage}
+                      onChange={(e) => setCommitMessage(e.target.value)}
+                      placeholder="Update plugin code"
+                      rows={3}
+                      className="w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm text-text placeholder:text-text-dim focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
+                  </div>
+
+                  <label className="flex items-center gap-2 text-sm text-text-muted cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={forcePush}
+                      onChange={(e) => setForcePush(e.target.checked)}
+                      className="rounded border-border"
+                    />
+                    Force push (overwrite remote changes)
+                  </label>
+                </div>
+
+                <div className="mt-6 flex gap-3">
+                  <button
+                    onClick={() => setPushModalOpen(false)}
+                    className="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium text-text hover:bg-surface-hover"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handlePush}
+                    disabled={!commitMessage.trim() || pushing}
+                    className="flex-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                  >
+                    {pushing ? 'Pushing...' : 'Push'}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Reset from Git Modal */}
+      {resetModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setResetModalOpen(false)}>
+          <div className="w-full max-w-md rounded-lg border border-border bg-surface p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-lg font-semibold text-text mb-2">Reset from Git</h2>
+            <p className="text-sm text-destructive mb-4">⚠️ This will delete all local files and clone fresh from Git!</p>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-text">Branch (Optional)</label>
+                <input
+                  type="text"
+                  value={resetBranch}
+                  onChange={(e) => setResetBranch(e.target.value)}
+                  placeholder="main"
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text placeholder:text-text-dim focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+                <p className="mt-1 text-xs text-text-muted">Leave empty to use current branch</p>
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-text">Commit Hash (Optional)</label>
+                <input
+                  type="text"
+                  value={resetCommit}
+                  onChange={(e) => setResetCommit(e.target.value)}
+                  placeholder="abc123def456..."
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-text placeholder:text-text-dim focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+                <p className="mt-1 text-xs text-text-muted">Leave empty to use latest commit</p>
+              </div>
+            </div>
+
+            <div className="mt-6 flex gap-3">
+              <button
+                onClick={() => setResetModalOpen(false)}
+                className="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium text-text hover:bg-surface-hover"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleReset}
+                disabled={resetting}
+                className="flex-1 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50"
+              >
+                {resetting ? 'Resetting...' : 'Reset Project'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Disconnect GitHub Modal */}
+      {disconnectModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setDisconnectModalOpen(false)}>
+          <div className="w-full max-w-sm rounded-lg border border-border bg-surface p-6 shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-lg font-semibold text-text mb-2">Disconnect GitHub</h2>
+            <p className="text-sm text-text-muted mb-6">
+              Are you sure you want to disconnect your GitHub account (@{githubUsername})?
+            </p>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setDisconnectModalOpen(false)}
+                className="flex-1 rounded-lg border border-border px-4 py-2 text-sm font-medium text-text hover:bg-surface-hover"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  handleGithubDisconnect()
+                  setDisconnectModalOpen(false)
+                }}
+                className="flex-1 rounded-lg bg-red-500 px-4 py-2 text-sm font-medium text-white hover:bg-red-600"
+              >
+                Disconnect
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

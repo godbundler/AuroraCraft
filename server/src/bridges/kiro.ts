@@ -12,7 +12,12 @@ const ORPHAN_ANSI_RE = /(?:^|[\s.])\[[0-9;]{1,20}m/g
 
 function normalizeAssistantText(text: string): string {
   if (!text) return ''
-  return text
+  const normalized = text
+    .replace(/\n[ \t]{2,}(?=[A-Za-z"(])/g, ' ')
+    .replace(/^\s{2,}([-*]\s)/gm, '$1')
+    .replace(/\n\s*\n(?=\s*[-*]\s)/g, '\n')
+
+  return normalized
     .replace(ACTION_TAG_INLINE_RE, (_m, ws) => ws || ' ')
     .replace(/\[Run\]\s+[^\n]*/g, '')
     .replace(ORPHAN_ANSI_RE, ' ')
@@ -374,7 +379,6 @@ export class KiroBridge implements BridgeInterface {
         success: true,
         output: outputText || rawOutput,
         metadata: {
-          kiroSessionId: task.sessionId,
           parts: parts.length > 0 ? parts : undefined,
         },
       }

@@ -21,6 +21,7 @@ export interface Project {
   language: 'java' | 'kotlin'
   javaVersion: string
   compiler: 'maven' | 'gradle' | 'both'
+  bridge: 'opencode' | 'kiro'
   visibility: 'public' | 'private'
   createdAt: string
   updatedAt: string
@@ -35,6 +36,7 @@ export interface CreateProjectInput {
   language?: 'java' | 'kotlin'
   javaVersion?: string
   compiler?: 'maven' | 'gradle' | 'both'
+  bridge?: 'opencode' | 'kiro'
 }
 
 export interface UpdateProjectInput {
@@ -166,19 +168,7 @@ export const AI_MODELS: AIModel[] = [
   { id: 'opencode/minimax-m2.5-free', name: 'MiniMax M2.5', provider: 'OpenCode', description: 'Free AI model for coding tasks' },
   
   // Kiro CLI models (via Kiro.dev)
-  { id: 'kiro/auto', name: 'Kiro Auto', provider: 'Kiro', description: 'Optimal model routing for best quality-to-cost ratio' },
-  { id: 'kiro/claude-opus-4.7', name: 'Claude Opus 4.7', provider: 'Kiro', description: 'Latest Opus with stronger agentic coding and 3x higher resolution vision (experimental)' },
-  { id: 'kiro/claude-opus-4.6', name: 'Claude Opus 4.6', provider: 'Kiro', description: 'Most capable model for complex multi-system problems' },
-  { id: 'kiro/claude-opus-4.5', name: 'Claude Opus 4.5', provider: 'Kiro', description: 'Maximum reasoning depth for large codebases' },
-  { id: 'kiro/claude-sonnet-4.6', name: 'Claude Sonnet 4.6', provider: 'Kiro', description: 'Near-Opus intelligence with better token efficiency' },
   { id: 'kiro/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', provider: 'Kiro', description: 'Strong agentic coding with extended autonomous operation' },
-  { id: 'kiro/claude-sonnet-4.0', name: 'Claude Sonnet 4.0', provider: 'Kiro', description: 'Consistent baseline with predictable behavior' },
-  { id: 'kiro/claude-haiku-4.5', name: 'Claude Haiku 4.5', provider: 'Kiro', description: 'Near-frontier intelligence at fraction of cost' },
-  { id: 'kiro/minimax-m2.5', name: 'MiniMax M2.5', provider: 'Kiro', description: 'Frontier coding at low cost (experimental)' },
-  { id: 'kiro/glm-5', name: 'GLM-5', provider: 'Kiro', description: '200K context for repo-scale agentic work (experimental)' },
-  { id: 'kiro/deepseek-3.2', name: 'DeepSeek 3.2', provider: 'Kiro', description: 'Agentic workflows at minimal cost (experimental)' },
-  { id: 'kiro/minimax-m2.1', name: 'MiniMax M2.1', provider: 'Kiro', description: 'Multilingual programming and UI generation (experimental)' },
-  { id: 'kiro/qwen3-coder-next', name: 'Qwen3 Coder Next', provider: 'Kiro', description: '256K context, most cost-effective option (experimental)' },
 ]
 
 export const DEFAULT_MODEL_ID = AI_MODELS[0].id

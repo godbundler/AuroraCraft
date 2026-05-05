@@ -43,3 +43,7 @@ Thumbs.db
 *.py
 prompt.txt
 .opencode/
+
+# pnpm
+pnpm-lock.yaml
+.pnpm-store/

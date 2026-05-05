@@ -1,5 +1,6 @@
 import Fastify from 'fastify'
 import fastifyStatic from '@fastify/static'
+import fastifyMultipart from '@fastify/multipart'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { env } from './env.js'
@@ -13,6 +14,7 @@ import { projectRoutes } from './routes/projects.js'
 import { agentRoutes } from './routes/agents.js'
 import { adminRoutes } from './routes/admin.js'
 import { communityRoutes } from './routes/community.js'
+import { githubRoutes } from './routes/github.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -29,6 +31,7 @@ const app = Fastify({
 await app.register(corsPlugin)
 await app.register(cookiePlugin)
 await app.register(websocketPlugin)
+await app.register(fastifyMultipart, { limits: { fileSize: 50 * 1024 * 1024 } })
 
 // Routes
 await app.register(authRoutes)
@@ -37,6 +40,7 @@ await app.register(projectRoutes)
 await app.register(agentRoutes)
 await app.register(adminRoutes)
 await app.register(communityRoutes)
+await app.register(githubRoutes)
 
 // Serve built client in production
 const clientDist = path.resolve(__dirname, '../../client/dist')
